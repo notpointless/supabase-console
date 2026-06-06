@@ -23,6 +23,7 @@ export const user = pgTable("user", {
   banned: boolean("banned").default(false),
   banReason: text("ban_reason"),
   banExpires: timestamp("ban_expires"),
+  twoFactorEnabled: boolean("two_factor_enabled").default(false),
 });
 
 export const session = pgTable(
@@ -97,6 +98,7 @@ export const organization = pgTable(
     metadata: text("metadata"),
     type: text("type").default("personal"),
     dataPrivacyLevel: text("data_privacy_level").default("disabled"),
+    mfaRequired: boolean("mfa_required").default(false),
   },
   (table) => [uniqueIndex("organization_slug_uidx").on(table.slug)],
 );
@@ -153,6 +155,23 @@ export const ssoProvider = pgTable("sso_provider", {
   domain: text("domain").notNull(),
 });
 
+export const twoFactor = pgTable(
+  "two_factor",
+  {
+    id: text("id").primaryKey(),
+    secret: text("secret").notNull(),
+    backupCodes: text("backup_codes").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    verified: boolean("verified").default(true),
+  },
+  (table) => [
+    index("twoFactor_secret_idx").on(table.secret),
+    index("twoFactor_userId_idx").on(table.userId),
+  ],
+);
+
 export const installation = pgTable("installation", {
   id: text("id").primaryKey(),
   installedAt: timestamp("installed_at").notNull(),
@@ -165,6 +184,7 @@ export const userRelations = relations(user, ({ many }) => ({
   members: many(member),
   invitations: many(invitation),
   ssoProviders: many(ssoProvider),
+  twoFactors: many(twoFactor),
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({
@@ -211,6 +231,13 @@ export const invitationRelations = relations(invitation, ({ one }) => ({
 export const ssoProviderRelations = relations(ssoProvider, ({ one }) => ({
   user: one(user, {
     fields: [ssoProvider.userId],
+    references: [user.id],
+  }),
+}));
+
+export const twoFactorRelations = relations(twoFactor, ({ one }) => ({
+  user: one(user, {
+    fields: [twoFactor.userId],
     references: [user.id],
   }),
 }));

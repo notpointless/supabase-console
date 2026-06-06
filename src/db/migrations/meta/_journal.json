@@ -50,6 +50,13 @@
       "when": 1780779578579,
       "tag": "0006_hot_doorman",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780783348360,
+      "tag": "0007_peaceful_kronos",
+      "breakpoints": true
     }
   ]
 }

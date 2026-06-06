@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { admin, organization } from "better-auth/plugins";
+import { admin, organization, twoFactor } from "better-auth/plugins";
 import { sso } from "@better-auth/sso";
 import { db } from "../db/client";
 import { getEnv } from "../config/env";
@@ -12,6 +12,7 @@ import { getMailer } from "../email/mailer";
 const env = getEnv();
 
 export const auth = betterAuth({
+  appName: "Supabase Console",
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
   trustedOrigins: [env.BETTER_AUTH_URL],
@@ -46,6 +47,7 @@ export const auth = betterAuth({
               required: false,
               defaultValue: "disabled",
             },
+            mfaRequired: { type: "boolean", input: true, required: false, defaultValue: false },
           },
         },
       },
@@ -77,6 +79,7 @@ export const auth = betterAuth({
         defaultRole: "developer" as "member",
       },
     }),
+    twoFactor(),
     consolePlugin(),
   ],
 });
