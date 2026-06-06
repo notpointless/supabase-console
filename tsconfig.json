@@ -12,5 +12,6 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["src", "tests", "*.config.ts"]
+  "include": ["src", "tests", "*.config.ts"],
+  "exclude": ["src/projects/stack/volumes"]
 }

@@ -1,4 +1,4 @@
-import { copyFileSync } from "node:fs";
+import { copyFileSync, cpSync } from "node:fs";
 import { defineConfig } from "tsup";
 
 export default defineConfig({
@@ -13,5 +13,6 @@ export default defineConfig({
       "src/projects/stack/compose.base.yml",
       "dist/compose.base.yml",
     );
+    cpSync("src/projects/stack/volumes", "dist/volumes", { recursive: true });
   },
 });
