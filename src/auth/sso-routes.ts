@@ -1,3 +1,25 @@
+/**
+ * Canonical SSO management surface for the console.
+ *
+ * Why these routes exist (and the plugin's native routes are blocked):
+ *
+ * 1. Role-name mismatch — the @better-auth/sso plugin's internal `hasOrgAdminRole`
+ *    helper grants access only to roles named "owner" or "admin".  Our org admin
+ *    role is named "administrator" (see src/auth/permissions.ts), so the plugin
+ *    would permanently deny administrator users.  These routes authorize via our
+ *    own `requirePermission`, which correctly honours the "administrator" role.
+ *
+ * 2. Secret echo — the plugin's POST /api/auth/sso/register returns the full
+ *    provider record including cert / clientSecret / privateKey fields.  Our
+ *    `publicProvider` helper strips those before responding.  Both plugin routes
+ *    (POST /api/auth/sso/register and POST /api/auth/sso/delete-provider) are
+ *    blocked at the app level (src/app.ts) so clients cannot reach them.
+ *
+ * Known gap: `ssoProvider.organizationId` has no DB foreign-key constraint to
+ * the `organization` table (the column is plugin-generated).  Providers are
+ * therefore NOT cascade-deleted when their org is removed — this is a minor
+ * hygiene issue to revisit when we add org-deletion support.
+ */
 import { Hono } from "hono";
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
@@ -56,14 +78,22 @@ orgSso.post("/api/v1/organizations/:orgId/sso", async (c) => {
     throw new AppError(400, "validation_error", "samlConfig or oidcConfig required");
   }
 
-  // Delegate to the @better-auth/sso plugin which handles config validation,
+  // Delegate to the @better-auth/sso plugin for config validation,
   // provider-limit enforcement, and persistence.
-  // We cast the body because the plugin validates the detailed structure at runtime.
-  await auth.api.registerSSOProvider({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    body: { ...parsed.data, organizationId: orgId } as any,
-    headers: c.req.raw.headers,
-  });
+  //
+  // We intentionally omit organizationId from the plugin body.  The plugin's
+  // internal hasOrgAdminRole check only recognises "owner" and "admin" roles,
+  // not our "administrator" role.  We have already authorised the caller via
+  // requirePermission above, so skipping that secondary check is correct.
+  // organizationId is patched onto the stored row by the UPDATE below.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await auth.api.registerSSOProvider({ body: parsed.data as any, headers: c.req.raw.headers });
+
+  // Bind the newly-created provider row to its organisation.
+  await db
+    .update(ssoProvider)
+    .set({ organizationId: orgId })
+    .where(eq(ssoProvider.providerId, parsed.data.providerId));
 
   // Fetch the stored row so we control which fields are returned.
   const [row] = await db

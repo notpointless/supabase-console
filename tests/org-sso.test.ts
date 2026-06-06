@@ -36,14 +36,19 @@ async function createOrg(cookie: string, name = "Acme"): Promise<string> {
 }
 
 async function addDeveloper(ownerCookie: string, orgId: string, email: string): Promise<string> {
+  return addMember(ownerCookie, orgId, email, "developer");
+}
+
+/** Invite a new user to an org with any role and return their session cookie. */
+async function addMember(ownerCookie: string, orgId: string, email: string, role: string): Promise<string> {
   let inv = "";
   setMailer({
     sendInvite: async (e) => {
       inv = new URL(e.acceptUrl).searchParams.get("invitationId") ?? "";
     },
   });
-  await app.request("/api/auth/organization/invite-member", json({ email, role: "developer", organizationId: orgId }, ownerCookie));
-  const r = await app.request("/api/auth/invite/accept-new", json({ invitationId: inv, name: "Dev", password: "supersecret123" }));
+  await app.request("/api/auth/organization/invite-member", json({ email, role, organizationId: orgId }, ownerCookie));
+  const r = await app.request("/api/auth/invite/accept-new", json({ invitationId: inv, name: "Member", password: "supersecret123" }));
   return r.headers.get("set-cookie") ?? "";
 }
 
@@ -113,6 +118,63 @@ describe("org sso", () => {
       json({ providerId: "x", issuer: "https://idp.example.com", domain: "d.com", samlConfig: SAML }),
     );
     expect(unauth.status).toBe(401);
+  });
+
+  it("administrator CAN register an SSO provider (200)", async () => {
+    const ownerCookie = await installAndLogin();
+    const orgId = await createOrg(ownerCookie);
+    // Invite a new user with the "administrator" role (our custom role name that
+    // maps to member:create — distinct from the plugin's "admin" role string).
+    const adminCookie = await addMember(ownerCookie, orgId, "administrator@example.com", "administrator");
+
+    const reg = await app.request(
+      `/api/v1/organizations/${orgId}/sso`,
+      json({ providerId: "corp", issuer: "https://idp.corp.com", domain: "corp.com", samlConfig: SAML }, adminCookie),
+    );
+    expect(reg.status).toBe(200);
+    const body = (await reg.json()) as Record<string, unknown>;
+    expect(body.providerId).toBe("corp");
+    // Must not expose secrets even via the administrator path
+    expect(JSON.stringify(body)).not.toContain("FAKE_CERT");
+  });
+
+  it("developer cannot delete an SSO provider (403)", async () => {
+    const ownerCookie = await installAndLogin();
+    const orgId = await createOrg(ownerCookie);
+
+    // Owner registers a provider first
+    await app.request(
+      `/api/v1/organizations/${orgId}/sso`,
+      json({ providerId: "acme", issuer: "https://idp.example.com", domain: "acme.com", samlConfig: SAML }, ownerCookie),
+    );
+
+    const devCookie = await addDeveloper(ownerCookie, orgId, "dev@example.com");
+
+    const del = await app.request(`/api/v1/organizations/${orgId}/sso/acme`, {
+      method: "DELETE",
+      headers: { cookie: devCookie },
+    });
+    expect(del.status).toBe(403);
+  });
+
+  it("cross-org: member of org B cannot GET or POST org A SSO (403)", async () => {
+    const ownerCookie = await installAndLogin();
+    const orgAId = await createOrg(ownerCookie, "Org A");
+    // Owner also creates org B; only org B membership is given to userB.
+    const orgBId = await createOrg(ownerCookie, "Org B");
+    const userBCookie = await addMember(ownerCookie, orgBId, "userb@example.com", "developer");
+
+    // userB has no membership in org A — both read and write must be denied.
+    const getRes = await app.request(`/api/v1/organizations/${orgAId}/sso`, {
+      headers: { cookie: userBCookie },
+    });
+    expect(getRes.status).toBe(403);
+
+    const postRes = await app.request(
+      `/api/v1/organizations/${orgAId}/sso`,
+      json({ providerId: "hack", issuer: "https://evil.com", domain: "evil.com", samlConfig: SAML }, userBCookie),
+    );
+    expect(postRes.status).toBe(403);
   });
 
   it("owner deletes a provider and it disappears from the list", async () => {
