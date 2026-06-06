@@ -5,6 +5,7 @@ import { installGate } from "./http/install-gate";
 import { health } from "./http/health";
 import { me } from "./http/me";
 import { projects } from "./projects/routes";
+import { orgSso } from "./auth/sso-routes";
 
 export const app = new Hono();
 
@@ -18,3 +19,4 @@ app.on(["POST", "GET"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 app.use("/api/v1/*", installGate);
 app.route("/", me);
 app.route("/", projects);
+app.route("/", orgSso);
