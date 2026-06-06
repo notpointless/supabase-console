@@ -14,7 +14,7 @@ describe("buildStack", () => {
   it("produces valid YAML, a per-project compose name, and no colliding container_name", () => {
     const { composeYaml } = buildStack(input);
     const doc = parse(composeYaml) as { name?: string; services: Record<string, Record<string, unknown>> };
-    expect(doc.name).toContain("abcdefghij1234567890");
+    expect(doc.name).toBe("sb-abcdefghij1234567890");
     expect(Object.keys(doc.services).length).toBeGreaterThanOrEqual(10);
     for (const svc of Object.values(doc.services)) {
       expect(svc.container_name).toBeUndefined();
@@ -35,5 +35,6 @@ describe("buildStack", () => {
     expect(env.SITE_URL).toBe("http://localhost:3000");
     expect(env.SUPABASE_PUBLIC_URL).toBe("http://localhost:18000");
     expect(env.POSTGRES_DB).toBe("postgres");
+    expect(env.POSTGRES_PORT).toBe("15432");
   });
 });

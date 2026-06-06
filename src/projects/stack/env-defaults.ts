@@ -17,7 +17,10 @@ export const STACK_ENV_DEFAULTS: Record<string, string> = {
   VAULT_ENC_KEY: "your-32-character-encryption-key",
   PG_META_CRYPTO_KEY: "your-encryption-key-32-chars-min",
 
-  // Analytics / Logflare tokens (operator must override)
+  // Analytics / Logflare tokens (operator must override).
+  // NOTE: analytics (Logflare) and vector services are not included in the current vendored
+  // compose; these tokens are retained for operator opt-in and forward compatibility so a
+  // future stack update can enable them without a schema change here.
   LOGFLARE_PUBLIC_ACCESS_TOKEN: "your-super-secret-and-long-logflare-key-public",
   LOGFLARE_PRIVATE_ACCESS_TOKEN: "your-super-secret-and-long-logflare-key-private",
 
