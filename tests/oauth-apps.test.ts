@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { app } from "../src/app";
 import { setMailer, resetMailer } from "../src/email/mailer";
+import { permissionsToScopes } from "../src/auth/oauth-scopes";
 
 const json = (body: unknown, cookie = "") => {
   const h: Record<string, string> = { "content-type": "application/json" };
@@ -220,5 +221,143 @@ describe("org oauth apps", () => {
       json(APP_BODY, userBCookie),
     );
     expect(postRes.status).toBe(403);
+  });
+
+  it("registers with permissions+website+logo; GET list reflects scopes, website, logo; no secret", async () => {
+    const cookie = await installAndLogin();
+    const orgId = await createOrg(cookie);
+
+    const regRes = await app.request(
+      `/api/v1/organizations/${orgId}/oauth-apps`,
+      json(
+        {
+          name: "Scoped App",
+          redirectUrls: ["https://scoped.example.com/callback"],
+          website: "https://scoped.example.com",
+          logo: "https://scoped.example.com/logo.png",
+          permissions: {
+            database: "write",
+            analytics: "read",
+            storage: "none",
+          },
+        },
+        cookie,
+      ),
+    );
+    expect(regRes.status).toBe(200);
+    const regBody = (await regRes.json()) as {
+      clientId: string;
+      clientSecret: string;
+      name: string;
+    };
+    expect(regBody.clientId).toBeTruthy();
+    expect(regBody.clientSecret).toBeTruthy();
+    expect(regBody.name).toBe("Scoped App");
+
+    // GET list — check scopes, website, logo and absence of secret
+    const listRes = await app.request(`/api/v1/organizations/${orgId}/oauth-apps`, {
+      headers: { cookie },
+    });
+    expect(listRes.status).toBe(200);
+    const listText = await listRes.text();
+    const list = JSON.parse(listText) as {
+      apps: Array<{
+        clientId: string;
+        name: string;
+        redirectUrls: string[];
+        scopes: string[];
+        website?: string;
+        logo?: string;
+      }>;
+    };
+
+    expect(list.apps).toHaveLength(1);
+    const appEntry = list.apps[0]!;
+
+    // Scopes: database write → read+write; analytics read → read only; storage none → omitted
+    expect(appEntry.scopes).toContain("database:read");
+    expect(appEntry.scopes).toContain("database:write");
+    expect(appEntry.scopes).toContain("analytics:read");
+    expect(appEntry.scopes).not.toContain("analytics:write");
+    expect(appEntry.scopes).not.toContain("storage:read");
+    expect(appEntry.scopes).not.toContain("storage:write");
+
+    // Extra fields
+    expect(appEntry.website).toBe("https://scoped.example.com");
+    expect(appEntry.logo).toBe("https://scoped.example.com/logo.png");
+
+    // Secret must never appear
+    expect(listText).not.toContain("clientSecret");
+    expect(listText).not.toContain(regBody.clientSecret);
+  });
+
+  it("GET /api/v1/oauth-scopes returns the catalog (12 resources)", async () => {
+    const cookie = await installAndLogin();
+
+    const res = await app.request("/api/v1/oauth-scopes", { headers: { cookie } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { resources: Array<{ id: string; label: string; description: string }> };
+
+    expect(body.resources).toHaveLength(12);
+
+    const ids = body.resources.map((r) => r.id);
+    expect(ids).toContain("database");
+    expect(ids).toContain("secrets");
+    expect(ids).toContain("storage");
+  });
+
+  it("GET /api/v1/oauth-scopes requires authentication (401)", async () => {
+    await installAndLogin(); // ensure the app is installed; then call WITHOUT the cookie
+    const res = await app.request("/api/v1/oauth-scopes");
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("permissionsToScopes unit tests", () => {
+  it("write access produces both :read and :write scopes", () => {
+    const result = permissionsToScopes({ database: "write" });
+    expect(result).toContain("database:read");
+    expect(result).toContain("database:write");
+    expect(result).toHaveLength(2);
+  });
+
+  it("read access produces only :read scope", () => {
+    const result = permissionsToScopes({ analytics: "read" });
+    expect(result).toContain("analytics:read");
+    expect(result).not.toContain("analytics:write");
+    expect(result).toHaveLength(1);
+  });
+
+  it("none access is omitted from scopes", () => {
+    const result = permissionsToScopes({ storage: "none" });
+    expect(result).toHaveLength(0);
+  });
+
+  it("unknown resource id is silently ignored", () => {
+    const result = permissionsToScopes({ unknown_resource: "write" });
+    expect(result).toHaveLength(0);
+  });
+
+  it("mixed permissions produce correct scope set", () => {
+    const result = permissionsToScopes({
+      database: "write",
+      analytics: "read",
+      storage: "none",
+      unknown_resource: "write",
+    });
+    expect(result).toContain("database:read");
+    expect(result).toContain("database:write");
+    expect(result).toContain("analytics:read");
+    expect(result).not.toContain("analytics:write");
+    expect(result).not.toContain("storage:read");
+    expect(result).not.toContain("storage:write");
+    expect(result).not.toContain("unknown_resource:read");
+    expect(result).not.toContain("unknown_resource:write");
+    expect(result).toHaveLength(3);
+  });
+
+  it("empty permissions produce empty scopes", () => {
+    const result = permissionsToScopes({});
+    expect(result).toHaveLength(0);
   });
 });
