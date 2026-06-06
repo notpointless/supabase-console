@@ -1,3 +1,4 @@
+import { copyFileSync } from "node:fs";
 import { defineConfig } from "tsup";
 
 export default defineConfig({
@@ -7,4 +8,10 @@ export default defineConfig({
   target: "node20",
   clean: true,
   sourcemap: true,
+  onSuccess: async () => {
+    copyFileSync(
+      "src/projects/stack/compose.base.yml",
+      "dist/compose.base.yml",
+    );
+  },
 });
