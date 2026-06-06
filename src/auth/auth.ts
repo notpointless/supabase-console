@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin, organization } from "better-auth/plugins";
+import { sso } from "@better-auth/sso";
 import { db } from "../db/client";
 import { getEnv } from "../config/env";
 import { ac, owner, administrator, developer } from "./permissions";
@@ -58,6 +59,13 @@ export const auth = betterAuth({
           role: Array.isArray(data.role) ? data.role.join(",") : String(data.role),
           inviterEmail: data.inviter?.user?.email,
         });
+      },
+    }),
+    sso({
+      organizationProvisioning: {
+        disabled: false,
+        // Type only allows "member"|"admin"; cast to pass our custom role string.
+        defaultRole: "developer" as "member",
       },
     }),
     consolePlugin(),
