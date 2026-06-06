@@ -255,8 +255,11 @@ orgOauthApps.delete("/api/v1/organizations/:orgId/oauth-apps/:clientId", async (
     throw new AppError(404, "not_found", "OAuth app not found");
   }
 
-  await db.delete(oauthApplication).where(eq(oauthApplication.clientId, clientId));
-  await db.delete(orgOauthApp).where(eq(orgOauthApp.clientId, clientId));
+  // Atomic: drop the app row and the org link together (no orphaned link on partial failure).
+  await db.transaction(async (tx) => {
+    await tx.delete(oauthApplication).where(eq(oauthApplication.clientId, clientId));
+    await tx.delete(orgOauthApp).where(eq(orgOauthApp.clientId, clientId));
+  });
 
   return c.json({ ok: true });
 });
