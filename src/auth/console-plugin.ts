@@ -105,6 +105,95 @@ export const consolePlugin = () => {
           }
         },
       ),
+      // Onboard a brand-new invitee (no existing account). Public sign-up is blocked
+      // and better-auth's /organization/accept-invitation requires an already-logged-in
+      // user, so a first-time invitee needs this server-side path to create their
+      // account AND join the org from the invitation in one shot. Existing users go
+      // through better-auth's /organization/accept-invitation instead.
+      acceptInviteNew: createAuthEndpoint(
+        "/invite/accept-new",
+        {
+          method: "POST",
+          body: z.object({
+            invitationId: z.string().min(1),
+            name: z.string().min(1),
+            password: z.string().min(8),
+          }),
+        },
+        async (ctx) => {
+          const invitation = await ctx.context.adapter.findOne<{
+            id: string;
+            email: string;
+            role: string;
+            status: string;
+            organizationId: string;
+            expiresAt: Date | string | null;
+          }>({
+            model: "invitation",
+            where: [{ field: "id", value: ctx.body.invitationId }],
+          });
+
+          if (!invitation || invitation.status !== "pending") {
+            throw new APIError("BAD_REQUEST", { message: "Invitation is not valid" });
+          }
+          if (invitation.expiresAt && new Date(invitation.expiresAt) < new Date()) {
+            throw new APIError("BAD_REQUEST", { message: "Invitation has expired" });
+          }
+
+          const existing = await ctx.context.adapter.findOne<{ id: string }>({
+            model: "user",
+            where: [{ field: "email", value: invitation.email }],
+          });
+          if (existing) {
+            throw new APIError("CONFLICT", {
+              message:
+                "An account already exists for this email; sign in and accept the invitation",
+            });
+          }
+
+          // Hash before the transaction: pure CPU work that needn't hold the tx open.
+          const hash = await ctx.context.password.hash(ctx.body.password);
+
+          // Atomic: createUser + linkAccount + member row + invitation status flip in
+          // ONE transaction. internalAdapter ops join the tx automatically via
+          // AsyncLocalStorage; raw `ctx.context.adapter` does NOT — so resolve the
+          // tx-bound adapter (getCurrentAdapter) for the member/invitation writes,
+          // mirroring the install-setup pattern. If any step throws, all roll back.
+          const user = await runWithTransaction(ctx.context.adapter, async () => {
+            const u = await ctx.context.internalAdapter.createUser({
+              email: invitation.email.toLowerCase(),
+              name: ctx.body.name,
+              emailVerified: true,
+            });
+            await ctx.context.internalAdapter.linkAccount({
+              userId: u.id,
+              providerId: "credential",
+              accountId: u.id,
+              password: hash,
+            });
+            const txAdapter = await getCurrentAdapter(ctx.context.adapter);
+            await txAdapter.create({
+              model: "member",
+              data: {
+                organizationId: invitation.organizationId,
+                userId: u.id,
+                role: invitation.role,
+                createdAt: new Date(),
+              },
+            });
+            await txAdapter.update({
+              model: "invitation",
+              where: [{ field: "id", value: invitation.id }],
+              update: { status: "accepted" },
+            });
+            return u;
+          });
+
+          const session = await ctx.context.internalAdapter.createSession(user.id);
+          await setSessionCookie(ctx, { session, user });
+          return ctx.json({ user, organizationId: invitation.organizationId });
+        },
+      ),
     },
     hooks: {
       before: [
