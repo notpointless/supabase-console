@@ -17,6 +17,7 @@ import {
   resumeProject,
   deleteProject,
 } from "./service";
+import { getProjectSecrets } from "./secrets";
 import type { Project } from "../db/schema";
 
 export const projects = new Hono();
@@ -138,4 +139,15 @@ projects.delete("/api/v1/projects/:ref", async (c) => {
   await requirePermission(c, row.organizationId, { project: ["delete"] });
   await deleteProject(ref);
   return c.json({ ok: true });
+});
+
+projects.get("/api/v1/projects/:ref/api-keys", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  const secrets = await getProjectSecrets(row.id);
+  if (!secrets) throw new AppError(404, "project_not_found", "Project secrets not found");
+  return c.json({ anonKey: secrets.anonKey, serviceRoleKey: secrets.serviceRoleKey });
 });
