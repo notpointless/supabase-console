@@ -6,6 +6,7 @@ import {
   orgGithubConnection,
   orgVercelConnection,
   projectRepoConnection,
+  projectPrivatelinkAccount,
 } from "../db/schema";
 import { requireSession, requirePermission } from "../http/guards";
 import { AppError } from "../http/error";
@@ -251,6 +252,110 @@ integrations.delete("/api/v1/projects/:ref/connections/:id", async (c) => {
   await db
     .delete(projectRepoConnection)
     .where(eq(projectRepoConnection.id, id));
+
+  return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// AWS PrivateLink — allowed AWS account IDs (per project)
+//
+// NOTE: Actual VPC endpoint-service provisioning is DEFERRED.
+//       These routes manage the account allowlist only.
+//       status is always "pending" until provisioning is implemented.
+// ---------------------------------------------------------------------------
+
+const awsAccountIdSchema = z.object({
+  awsAccountId: z.string().regex(/^\d{12}$/, "AWS account ID must be exactly 12 digits"),
+});
+
+// GET /api/v1/projects/:ref/privatelink/accounts
+// Member permission (project:content). Returns { accounts: [{ id, awsAccountId, status }] }.
+integrations.get("/api/v1/projects/:ref/privatelink/accounts", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const project = await getProjectByRef(ref);
+  if (!project) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, project.organizationId, MEMBER);
+
+  const rows = await db
+    .select({
+      id: projectPrivatelinkAccount.id,
+      awsAccountId: projectPrivatelinkAccount.awsAccountId,
+      status: projectPrivatelinkAccount.status,
+    })
+    .from(projectPrivatelinkAccount)
+    .where(eq(projectPrivatelinkAccount.projectId, project.id));
+
+  return c.json({ accounts: rows });
+});
+
+// POST /api/v1/projects/:ref/privatelink/accounts
+// Owner/admin permission (member:create). Body: { awsAccountId }.
+// Inserts with status "pending". Rejects duplicate with 409 account_exists.
+integrations.post("/api/v1/projects/:ref/privatelink/accounts", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const project = await getProjectByRef(ref);
+  if (!project) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, project.organizationId, OWNER_ADMIN);
+
+  const parsed = awsAccountIdSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    throw new AppError(400, "validation_error", "Invalid payload", parsed.error.flatten());
+  }
+
+  const { awsAccountId } = parsed.data;
+
+  // Check for duplicate before insert for a clear 409 error code.
+  const [existing] = await db
+    .select({ id: projectPrivatelinkAccount.id })
+    .from(projectPrivatelinkAccount)
+    .where(
+      and(
+        eq(projectPrivatelinkAccount.projectId, project.id),
+        eq(projectPrivatelinkAccount.awsAccountId, awsAccountId),
+      ),
+    );
+  if (existing) {
+    throw new AppError(409, "account_exists", "This AWS account ID is already in the allowlist");
+  }
+
+  const [inserted] = await db
+    .insert(projectPrivatelinkAccount)
+    .values({ projectId: project.id, awsAccountId })
+    .returning();
+
+  return c.json({
+    id: inserted!.id,
+    awsAccountId: inserted!.awsAccountId,
+    status: inserted!.status,
+  });
+});
+
+// DELETE /api/v1/projects/:ref/privatelink/accounts/:id
+// Owner/admin permission (member:create).
+integrations.delete("/api/v1/projects/:ref/privatelink/accounts/:id", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const id = c.req.param("id");
+  const project = await getProjectByRef(ref);
+  if (!project) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, project.organizationId, OWNER_ADMIN);
+
+  const [row] = await db
+    .select({ id: projectPrivatelinkAccount.id })
+    .from(projectPrivatelinkAccount)
+    .where(
+      and(
+        eq(projectPrivatelinkAccount.id, id),
+        eq(projectPrivatelinkAccount.projectId, project.id),
+      ),
+    );
+  if (!row) throw new AppError(404, "not_found", "PrivateLink account not found");
+
+  await db
+    .delete(projectPrivatelinkAccount)
+    .where(eq(projectPrivatelinkAccount.id, id));
 
   return c.json({ ok: true });
 });

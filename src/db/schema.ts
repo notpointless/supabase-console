@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, boolean, jsonb, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, boolean, jsonb, timestamp, integer, unique } from "drizzle-orm/pg-core";
 import { organization, user } from "./auth-schema";
 
 // All better-auth tables are generated into auth-schema.ts.
@@ -96,6 +96,26 @@ export const projectRepoConnection = pgTable("project_repo_connection", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ---------------------------------------------------------------------------
+// AWS PrivateLink: per-project list of allowed AWS account IDs.
+// NOTE: Actual VPC endpoint-service provisioning is DEFERRED.
+//       This table is the account allowlist only; status "pending" until
+//       provisioning is implemented.
+// ---------------------------------------------------------------------------
+export const projectPrivatelinkAccount = pgTable(
+  "project_privatelink_account",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    awsAccountId: text("aws_account_id").notNull(),
+    status: text("status").notNull().default("pending"), // pending | active (provisioning deferred)
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("project_privatelink_account_project_id_aws_account_id_uniq").on(t.projectId, t.awsAccountId)],
+);
+
 export type Project = typeof project.$inferSelect;
 export type OrgAwsCredentials = typeof orgAwsCredentials.$inferSelect;
 export type ProjectSecrets = typeof projectSecrets.$inferSelect;
@@ -103,3 +123,4 @@ export type OrgOauthApp = typeof orgOauthApp.$inferSelect;
 export type OrgGithubConnection = typeof orgGithubConnection.$inferSelect;
 export type OrgVercelConnection = typeof orgVercelConnection.$inferSelect;
 export type ProjectRepoConnection = typeof projectRepoConnection.$inferSelect;
+export type ProjectPrivatelinkAccount = typeof projectPrivatelinkAccount.$inferSelect;

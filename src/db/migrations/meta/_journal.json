@@ -71,6 +71,13 @@
       "when": 1780786806450,
       "tag": "0009_silent_warpath",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1780787652690,
+      "tag": "0010_bored_professor_monster",
+      "breakpoints": true
     }
   ]
 }
