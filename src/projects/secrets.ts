@@ -1,5 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { SignJWT } from "jose";
+import { eq } from "drizzle-orm";
+import { db } from "../db/client";
+import { projectSecrets } from "../db/schema";
+import { encrypt, decrypt } from "../crypto/secrets";
 
 export interface ProjectSecretValues {
   jwtSecret: string;
@@ -36,5 +40,28 @@ export async function generateProjectSecrets(): Promise<ProjectSecretValues> {
     serviceRoleKey,
     secretKeyBase: randomBytes(32).toString("hex"),
     dashboardPassword: randomBytes(18).toString("base64url"),
+  };
+}
+
+export async function storeProjectSecrets(projectId: string, v: ProjectSecretValues): Promise<void> {
+  await db.insert(projectSecrets).values({
+    projectId,
+    jwtSecretEncrypted: encrypt(v.jwtSecret),
+    anonKeyEncrypted: encrypt(v.anonKey),
+    serviceRoleKeyEncrypted: encrypt(v.serviceRoleKey),
+    secretKeyBaseEncrypted: encrypt(v.secretKeyBase),
+    dashboardPasswordEncrypted: encrypt(v.dashboardPassword),
+  });
+}
+
+export async function getProjectSecrets(projectId: string): Promise<ProjectSecretValues | undefined> {
+  const [row] = await db.select().from(projectSecrets).where(eq(projectSecrets.projectId, projectId));
+  if (!row) return undefined;
+  return {
+    jwtSecret: decrypt(row.jwtSecretEncrypted),
+    anonKey: decrypt(row.anonKeyEncrypted),
+    serviceRoleKey: decrypt(row.serviceRoleKeyEncrypted),
+    secretKeyBase: decrypt(row.secretKeyBaseEncrypted),
+    dashboardPassword: decrypt(row.dashboardPasswordEncrypted),
   };
 }
