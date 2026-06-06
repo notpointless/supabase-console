@@ -20,6 +20,7 @@
     "@hono/node-server": "^2.0.4",
     "better-auth": "1.6.14",
     "drizzle-orm": "^0.45.2",
+    "graphile-worker": "^0.16.6",
     "hono": "^4.12.23",
     "nodemailer": "^8.0.10",
     "pg": "^8.21.0",
