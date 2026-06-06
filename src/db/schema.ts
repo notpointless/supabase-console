@@ -73,7 +73,33 @@ export const orgOauthApp = pgTable("org_oauth_app", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const orgGithubConnection = pgTable("org_github_connection", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: text("organization_id").notNull().unique().references(() => organization.id, { onDelete: "cascade" }),
+  githubLogin: text("github_login").notNull(),
+  accessTokenEncrypted: text("access_token_encrypted").notNull(),
+  installationId: text("installation_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const orgVercelConnection = pgTable("org_vercel_connection", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: text("organization_id").notNull().unique().references(() => organization.id, { onDelete: "cascade" }),
+  vercelTeam: text("vercel_team").notNull(),
+  accessTokenEncrypted: text("access_token_encrypted").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const projectRepoConnection = pgTable("project_repo_connection", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull().references(() => project.id, { onDelete: "cascade" }),
+  repoFullName: text("repo_full_name").notNull(),
+  branch: text("branch"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type Project = typeof project.$inferSelect;
 export type OrgAwsCredentials = typeof orgAwsCredentials.$inferSelect;
 export type ProjectSecrets = typeof projectSecrets.$inferSelect;
 export type OrgOauthApp = typeof orgOauthApp.$inferSelect;
+export type OrgGithubConnection = typeof orgGithubConnection.$inferSelect;
+export type OrgVercelConnection = typeof orgVercelConnection.$inferSelect;
+export type ProjectRepoConnection = typeof projectRepoConnection.$inferSelect;

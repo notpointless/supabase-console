@@ -8,6 +8,7 @@ import { projects } from "./projects/routes";
 import { orgSso } from "./auth/sso-routes";
 import { orgOauthApps } from "./auth/oauth-app-routes";
 import { orgSecurity } from "./org/security-routes";
+import { integrations } from "./integrations/routes";
 
 export const app = new Hono();
 
@@ -40,4 +41,5 @@ app.route("/", me);
 app.route("/", orgOauthApps);
 app.route("/", orgSecurity);
 app.route("/", projects);
+app.route("/", integrations);
 app.route("/", orgSso);

@@ -64,6 +64,13 @@
       "when": 1780784650579,
       "tag": "0008_cynical_shinobi_shaw",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1780786806450,
+      "tag": "0009_silent_warpath",
+      "breakpoints": true
     }
   ]
 }
