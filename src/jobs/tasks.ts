@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db/client";
 import { project } from "../db/schema";
 import { getProvisionerFor } from "../projects/provisioner";
@@ -19,7 +19,7 @@ export const taskList = {
       await db
         .update(project)
         .set({ status: "active", connection: result.connection, failureReason: null, updatedAt: new Date() })
-        .where(eq(project.ref, ref));
+        .where(and(eq(project.ref, ref), eq(project.status, "provisioning")));
     } catch (e) {
       await db
         .update(project)
@@ -32,16 +32,30 @@ export const taskList = {
     const row = await loadByRef(ref);
     if (!row) return;
     if (row.status !== "active") return;
-    await getProvisionerFor(row).pause(row);
-    await db.update(project).set({ status: "paused", updatedAt: new Date() }).where(eq(project.ref, ref));
+    try {
+      await getProvisionerFor(row).pause(row);
+      await db.update(project).set({ status: "paused", updatedAt: new Date() }).where(eq(project.ref, ref));
+    } catch (e) {
+      await db
+        .update(project)
+        .set({ status: "failed", failureReason: e instanceof Error ? e.message : "pause failed", updatedAt: new Date() })
+        .where(eq(project.ref, ref));
+    }
   },
   resume: async (payload: unknown): Promise<void> => {
     const { ref } = payload as { ref: string };
     const row = await loadByRef(ref);
     if (!row) return;
     if (row.status !== "paused") return;
-    await getProvisionerFor(row).resume(row);
-    await db.update(project).set({ status: "active", updatedAt: new Date() }).where(eq(project.ref, ref));
+    try {
+      await getProvisionerFor(row).resume(row);
+      await db.update(project).set({ status: "active", updatedAt: new Date() }).where(eq(project.ref, ref));
+    } catch (e) {
+      await db
+        .update(project)
+        .set({ status: "failed", failureReason: e instanceof Error ? e.message : "resume failed", updatedAt: new Date() })
+        .where(eq(project.ref, ref));
+    }
   },
   delete: async (payload: unknown): Promise<void> => {
     const { ref } = payload as { ref: string };

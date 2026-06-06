@@ -1,9 +1,6 @@
 // Static defaults copied from supabase/supabase docker/.env.example @ 2026-06-06.
 // Dynamic per-project values are layered on top in buildStack().
 export const STACK_ENV_DEFAULTS: Record<string, string> = {
-  // Compose override
-  COMPOSE_FILE: "docker-compose.yml",
-
   // Asymmetric / opaque key placeholders (empty by default)
   SUPABASE_PUBLISHABLE_KEY: "",
   SUPABASE_SECRET_KEY: "",

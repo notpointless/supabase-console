@@ -11,6 +11,7 @@ export interface Ports {
 
 const PORTS_LOCK = 8123;
 
+// Ports are monotonically allocated from max(dbPort)+1; they are NOT reclaimed on delete (acceptable at current scale; revisit if many create/delete cycles occur).
 export async function allocatePorts(projectId: string): Promise<Ports> {
   const base = getEnv().PORT_BASE;
   return db.transaction(async (tx) => {
