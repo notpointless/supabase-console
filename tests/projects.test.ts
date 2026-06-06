@@ -81,4 +81,16 @@ describe("projects", () => {
     const unauth = await app.request(`/api/v1/organizations/${orgId}/projects`, json({ name: "P", region: "shared", dbPassword: "supersecret123" }));
     expect(unauth.status).toBe(401);
   });
+
+  it("generates per-project secrets at create", async () => {
+    const { getProjectSecrets } = await import("../src/projects/secrets");
+    const { getProjectByRef } = await import("../src/projects/service");
+    const cookie = await owner();
+    const orgId = await org(cookie);
+    const ref = (await (await app.request(`/api/v1/organizations/${orgId}/projects`, json({ name: "P", region: "shared", dbPassword: "supersecret123" }, cookie))).json()).ref;
+    const row = await getProjectByRef(ref);
+    const secrets = await getProjectSecrets(row!.id);
+    expect(secrets).toBeDefined();
+    expect(secrets!.anonKey.split(".")).toHaveLength(3);
+  });
 });

@@ -1,12 +1,13 @@
 import { randomInt } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../db/client";
-import { project, type Project } from "../db/schema";
+import { project, projectSecrets, type Project } from "../db/schema";
 import { encrypt } from "../crypto/secrets";
 import { isKnownRegion, isEc2Region } from "../regions";
 import { hasValidCredentials } from "../aws/credentials-service";
 import { getQueue } from "../jobs/queue";
 import { AppError } from "../http/error";
+import { generateProjectSecrets } from "./secrets";
 
 function generateRef(): string {
   let s = "";
@@ -38,19 +39,30 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
     infrastructureType = "dedicated_ec2";
   }
   const ref = generateRef();
-  await db.insert(project).values({
-    ref,
-    organizationId: input.organizationId,
-    name: input.name,
-    region: input.region,
-    infrastructureType,
-    postgresType: input.postgresType ?? "postgres",
-    status: "provisioning",
-    dataApiEnabled: input.dataApiEnabled ?? true,
-    autoExposeNewTables: input.autoExposeNewTables ?? true,
-    autoEnableRls: input.autoEnableRls ?? true,
-    dbPasswordEncrypted: encrypt(input.dbPassword),
-    createdBy: input.createdBy,
+  const secrets = await generateProjectSecrets();
+  await db.transaction(async (tx) => {
+    const [row] = await tx.insert(project).values({
+      ref,
+      organizationId: input.organizationId,
+      name: input.name,
+      region: input.region,
+      infrastructureType,
+      postgresType: input.postgresType ?? "postgres",
+      status: "provisioning",
+      dataApiEnabled: input.dataApiEnabled ?? true,
+      autoExposeNewTables: input.autoExposeNewTables ?? true,
+      autoEnableRls: input.autoEnableRls ?? true,
+      dbPasswordEncrypted: encrypt(input.dbPassword),
+      createdBy: input.createdBy,
+    }).returning();
+    await tx.insert(projectSecrets).values({
+      projectId: row!.id,
+      jwtSecretEncrypted: encrypt(secrets.jwtSecret),
+      anonKeyEncrypted: encrypt(secrets.anonKey),
+      serviceRoleKeyEncrypted: encrypt(secrets.serviceRoleKey),
+      secretKeyBaseEncrypted: encrypt(secrets.secretKeyBase),
+      dashboardPasswordEncrypted: encrypt(secrets.dashboardPassword),
+    });
   });
   await getQueue().enqueue("provision", { ref });
   return (await getProjectByRef(ref))!;
