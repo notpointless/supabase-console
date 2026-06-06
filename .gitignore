@@ -2,3 +2,6 @@ node_modules/
 dist/
 .env
 *.log
+
+# Local planning/design docs (specs, plans) — kept out of the repo
+docs/superpowers/
