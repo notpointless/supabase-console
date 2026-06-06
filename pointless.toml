@@ -1,0 +1,24 @@
+[repo]
+name    = "supabase-console"
+type    = "app"
+stack   = "ts-node"
+version = "0.1.0"
+
+[commands]
+build  = "pnpm build"
+test   = "pnpm test"
+dev    = "pnpm dev"
+lint   = "pnpm lint && pnpm typecheck"
+deploy = "true"
+
+[commands.run]
+migrate       = "pnpm migrate"
+db-generate   = "pnpm db:generate"
+auth-generate = "pnpm auth:generate"
+
+[env]
+required = ["DATABASE_URL", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"]
+optional = ["PORT", "LOG_LEVEL"]
+
+[deploy]
+target = "none"
