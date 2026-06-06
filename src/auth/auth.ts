@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { admin, organization, twoFactor } from "better-auth/plugins";
+import { admin, organization, twoFactor, oidcProvider } from "better-auth/plugins";
 import { sso } from "@better-auth/sso";
 import { db } from "../db/client";
 import { getEnv } from "../config/env";
@@ -80,6 +80,9 @@ export const auth = betterAuth({
       },
     }),
     twoFactor(),
+    // Makes the console an OIDC provider so orgs can publish OAuth apps.
+    // loginPage is where the provider redirects unauthenticated users mid-flow.
+    oidcProvider({ loginPage: "/sign-in" }),
     consolePlugin(),
   ],
 });

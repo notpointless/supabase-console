@@ -6,6 +6,7 @@ import { health } from "./http/health";
 import { me } from "./http/me";
 import { projects } from "./projects/routes";
 import { orgSso } from "./auth/sso-routes";
+import { orgOauthApps } from "./auth/oauth-app-routes";
 import { orgSecurity } from "./org/security-routes";
 
 export const app = new Hono();
@@ -36,6 +37,7 @@ app.on(["POST", "GET"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 // Everything under /api/v1 is gated until install completes.
 app.use("/api/v1/*", installGate);
 app.route("/", me);
+app.route("/", orgOauthApps);
 app.route("/", orgSecurity);
 app.route("/", projects);
 app.route("/", orgSso);

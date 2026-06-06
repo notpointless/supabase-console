@@ -57,6 +57,13 @@
       "when": 1780783348360,
       "tag": "0007_peaceful_kronos",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1780784650579,
+      "tag": "0008_cynical_shinobi_shaw",
+      "breakpoints": true
     }
   ]
 }

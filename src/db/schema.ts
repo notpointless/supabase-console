@@ -62,6 +62,18 @@ export const projectSecrets = pgTable("project_secrets", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Scopes a plugin-generated `oauthApplication` (which has no organizationId)
+// to the org that published it. One row per published OAuth app.
+export const orgOauthApp = pgTable("org_oauth_app", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organization.id, { onDelete: "cascade" }),
+  clientId: text("client_id").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type Project = typeof project.$inferSelect;
 export type OrgAwsCredentials = typeof orgAwsCredentials.$inferSelect;
 export type ProjectSecrets = typeof projectSecrets.$inferSelect;
+export type OrgOauthApp = typeof orgOauthApp.$inferSelect;
