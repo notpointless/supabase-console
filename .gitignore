@@ -8,3 +8,7 @@ docs/superpowers/
 
 # Repo CLAUDE.md kept local (not committed)
 CLAUDE.md
+
+# Local Claude Code tooling (MCP bridge, local settings)
+.mcp.json
+.claude/settings.local.json
