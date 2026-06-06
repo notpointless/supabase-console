@@ -10,6 +10,9 @@ const schema = z.object({
   MAIL_FROM: z.string().optional(),
   APP_URL: z.string().url().optional(),
   ENCRYPTION_KEY: z.string().length(64),
+  DATA_DIR: z.string().default("./.data"),
+  PUBLIC_HOST: z.string().default("localhost"),
+  PORT_BASE: z.coerce.number().int().positive().default(20000),
 });
 
 export type Env = z.infer<typeof schema>;

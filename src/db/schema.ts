@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, boolean, jsonb, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, boolean, jsonb, timestamp, integer } from "drizzle-orm/pg-core";
 import { organization, user } from "./auth-schema";
 
 // All better-auth tables are generated into auth-schema.ts.
@@ -20,6 +20,9 @@ export const project = pgTable("project", {
   autoEnableRls: boolean("auto_enable_rls").notNull().default(true),
   dbPasswordEncrypted: text("db_password_encrypted").notNull(),
   connection: jsonb("connection"),
+  kongHttpPort: integer("kong_http_port"),
+  kongHttpsPort: integer("kong_https_port"),
+  dbPort: integer("db_port"),
   failureReason: text("failure_reason"),
   createdBy: text("created_by")
     .notNull()
