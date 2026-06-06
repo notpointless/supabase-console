@@ -1,6 +1,7 @@
 import { randomInt } from "node:crypto";
 
-export const ORG_TYPES = ["personal", "educational", "startup", "agency", "company"] as const;
+// "na" is the stored token for the "N/A" option (informational only).
+export const ORG_TYPES = ["personal", "educational", "startup", "agency", "company", "na"] as const;
 export type OrgType = (typeof ORG_TYPES)[number];
 
 export const DATA_PRIVACY_LEVELS = [
