@@ -9,6 +9,7 @@ const schema = z.object({
   SMTP_URL: z.string().optional(),
   MAIL_FROM: z.string().optional(),
   APP_URL: z.string().url().optional(),
+  ENCRYPTION_KEY: z.string().length(64),
 });
 
 export type Env = z.infer<typeof schema>;

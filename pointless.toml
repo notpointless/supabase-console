@@ -17,7 +17,7 @@ db-generate   = "pnpm db:generate"
 auth-generate = "pnpm auth:generate"
 
 [env]
-required = ["DATABASE_URL", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"]
+required = ["DATABASE_URL", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL", "ENCRYPTION_KEY"]
 optional = ["PORT", "LOG_LEVEL", "SMTP_URL", "MAIL_FROM", "APP_URL"]
 
 [deploy]

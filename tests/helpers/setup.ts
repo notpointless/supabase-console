@@ -8,6 +8,7 @@ const container = await new PostgreSqlContainer("postgres:16-alpine").start();
 process.env.DATABASE_URL = container.getConnectionUri();
 process.env.BETTER_AUTH_SECRET = "test-secret-test-secret-test-secret";
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
+process.env.ENCRYPTION_KEY = "a".repeat(64);
 
 // Import AFTER env is set so the lazy db client binds to the container.
 const { db, pool } = await import("../../src/db/client");

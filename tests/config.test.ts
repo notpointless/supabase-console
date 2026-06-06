@@ -7,6 +7,7 @@ describe("parseEnv", () => {
       DATABASE_URL: "postgres://u:p@localhost:5432/db",
       BETTER_AUTH_SECRET: "x".repeat(32),
       BETTER_AUTH_URL: "http://localhost:3000",
+      ENCRYPTION_KEY: "a".repeat(64),
     });
     expect(env.PORT).toBe(3000);
     expect(env.LOG_LEVEL).toBe("info");
@@ -21,6 +22,7 @@ describe("parseEnv", () => {
       DATABASE_URL: "postgres://u:p@localhost:5432/db",
       BETTER_AUTH_SECRET: "x".repeat(32),
       BETTER_AUTH_URL: "http://localhost:3000",
+      ENCRYPTION_KEY: "a".repeat(64),
       SMTP_URL: "smtp://user:pass@localhost:1025",
       MAIL_FROM: "Console <no-reply@example.com>",
       APP_URL: "http://localhost:3000",
@@ -32,6 +34,7 @@ describe("parseEnv", () => {
       DATABASE_URL: "postgres://u:p@localhost:5432/db",
       BETTER_AUTH_SECRET: "x".repeat(32),
       BETTER_AUTH_URL: "http://localhost:3000",
+      ENCRYPTION_KEY: "a".repeat(64),
     });
     expect(without.SMTP_URL).toBeUndefined();
     expect(without.MAIL_FROM).toBeUndefined();
