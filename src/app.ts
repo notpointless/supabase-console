@@ -4,6 +4,7 @@ import { onError } from "./http/error";
 import { installGate } from "./http/install-gate";
 import { health } from "./http/health";
 import { me } from "./http/me";
+import { projects } from "./projects/routes";
 
 export const app = new Hono();
 
@@ -16,3 +17,4 @@ app.on(["POST", "GET"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 // Everything under /api/v1 is gated until install completes.
 app.use("/api/v1/*", installGate);
 app.route("/", me);
+app.route("/", projects);
