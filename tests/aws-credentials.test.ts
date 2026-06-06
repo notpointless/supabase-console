@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { app } from "../src/app";
 import { setValidator, resetValidator } from "../src/aws/credential-validator";
+import { setMailer, resetMailer } from "../src/email/mailer";
 
 const json = (body: unknown, cookie = ""): RequestInit => {
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -19,7 +20,10 @@ async function createOrg(cookie: string): Promise<string> {
 }
 
 describe("aws-credentials", () => {
-  beforeEach(() => resetValidator());
+  beforeEach(() => {
+    resetValidator();
+    resetMailer();
+  });
 
   it("stores validated creds, enables EC2 regions, never returns the secret", async () => {
     setValidator({ validate: async () => ({ ok: true, accountId: "123456789012" }) });
@@ -70,5 +74,39 @@ describe("aws-credentials", () => {
     expect(del.status).toBe(200);
     const status = await (await req(`/api/v1/organizations/${orgId}/aws-credentials`, { headers: { cookie } })).json();
     expect(status.exists).toBe(false);
+  });
+
+  it("developer member cannot manage AWS creds (403)", async () => {
+    let invitationId = "";
+    setMailer({
+      sendInvite: async (e) => {
+        invitationId = new URL(e.acceptUrl).searchParams.get("invitationId") ?? "";
+      },
+    });
+
+    const cookie = await installOwner();
+    const orgId = await createOrg(cookie);
+
+    // Invite dev@example.com as developer
+    await app.request(
+      "/api/auth/organization/invite-member",
+      json({ email: "dev@example.com", role: "developer", organizationId: orgId }, cookie),
+    );
+    expect(invitationId).toBeTruthy();
+
+    // Accept invite as a brand-new user
+    const acceptRes = await app.request(
+      "/api/auth/invite/accept-new",
+      json({ invitationId, name: "Dev User", password: "supersecret123" }),
+    );
+    expect(acceptRes.status).toBe(200);
+    const devCookie = acceptRes.headers.get("set-cookie") ?? "";
+
+    // Developer must not be able to manage AWS creds
+    const res = await req(
+      `/api/v1/organizations/${orgId}/aws-credentials`,
+      json({ accessKeyId: "AKIA", secretAccessKey: "secret", defaultRegion: "us-east-1" }, devCookie),
+    );
+    expect(res.status).toBe(403);
   });
 });

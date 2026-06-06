@@ -11,6 +11,12 @@ export interface SetCredentialsInput {
   defaultRegion: string;
 }
 
+export interface SetCredentialsResult {
+  validated: boolean;
+  accountId?: string;
+  defaultRegion?: string;
+}
+
 export interface CredentialsStatus {
   exists: boolean;
   validated: boolean;
@@ -18,19 +24,28 @@ export interface CredentialsStatus {
   defaultRegion?: string;
 }
 
-export async function setCredentials(input: SetCredentialsInput): Promise<CredentialsStatus> {
+export async function setCredentials(input: SetCredentialsInput): Promise<SetCredentialsResult> {
   const result = await getValidator().validate({
     accessKeyId: input.accessKeyId,
     secretAccessKey: input.secretAccessKey,
     region: input.defaultRegion,
   });
   if (!result.ok) {
-    return { exists: false, validated: false };
+    return { validated: false };
   }
-  const row = {
+  const encryptedSecret = encrypt(input.secretAccessKey);
+  const insertValues = {
     organizationId: input.organizationId,
     accessKeyId: input.accessKeyId,
-    secretAccessKeyEncrypted: encrypt(input.secretAccessKey),
+    secretAccessKeyEncrypted: encryptedSecret,
+    defaultRegion: input.defaultRegion,
+    awsAccountId: result.accountId ?? null,
+    validatedAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const updatePayload = {
+    accessKeyId: input.accessKeyId,
+    secretAccessKeyEncrypted: encryptedSecret,
     defaultRegion: input.defaultRegion,
     awsAccountId: result.accountId ?? null,
     validatedAt: new Date(),
@@ -38,13 +53,20 @@ export async function setCredentials(input: SetCredentialsInput): Promise<Creden
   };
   await db
     .insert(orgAwsCredentials)
-    .values(row)
-    .onConflictDoUpdate({ target: orgAwsCredentials.organizationId, set: row });
-  return { exists: true, validated: true, accountId: result.accountId, defaultRegion: input.defaultRegion };
+    .values(insertValues)
+    .onConflictDoUpdate({ target: orgAwsCredentials.organizationId, set: updatePayload });
+  return { validated: true, accountId: result.accountId, defaultRegion: input.defaultRegion };
 }
 
 export async function getCredentialsStatus(organizationId: string): Promise<CredentialsStatus> {
-  const [row] = await db.select().from(orgAwsCredentials).where(eq(orgAwsCredentials.organizationId, organizationId));
+  const [row] = await db
+    .select({
+      validatedAt: orgAwsCredentials.validatedAt,
+      awsAccountId: orgAwsCredentials.awsAccountId,
+      defaultRegion: orgAwsCredentials.defaultRegion,
+    })
+    .from(orgAwsCredentials)
+    .where(eq(orgAwsCredentials.organizationId, organizationId));
   if (!row) return { exists: false, validated: false };
   return {
     exists: true,
@@ -55,7 +77,10 @@ export async function getCredentialsStatus(organizationId: string): Promise<Cred
 }
 
 export async function hasValidCredentials(organizationId: string): Promise<boolean> {
-  const [row] = await db.select().from(orgAwsCredentials).where(eq(orgAwsCredentials.organizationId, organizationId));
+  const [row] = await db
+    .select({ validatedAt: orgAwsCredentials.validatedAt })
+    .from(orgAwsCredentials)
+    .where(eq(orgAwsCredentials.organizationId, organizationId));
   return !!row && row.validatedAt != null;
 }
 
