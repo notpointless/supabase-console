@@ -19,6 +19,7 @@ import {
 } from "./service";
 import { getProjectSecrets } from "./secrets";
 import type { Project } from "../db/schema";
+import { assertMfaCompliant } from "../auth/mfa";
 
 export const projects = new Hono();
 
@@ -88,6 +89,7 @@ projects.post("/api/v1/organizations/:orgId/projects", async (c) => {
   const session = await requireSession(c);
   const orgId = c.req.param("orgId");
   await requirePermission(c, orgId, { project: ["create"] });
+  await assertMfaCompliant(c, orgId);
   const parsed = createSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) throw new AppError(400, "validation_error", "Invalid project payload", parsed.error.flatten());
   const created = await createProject({ organizationId: orgId, createdBy: session.user.id, ...parsed.data });
