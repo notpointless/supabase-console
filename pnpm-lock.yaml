@@ -32,12 +32,18 @@ importers:
       hono:
         specifier: ^4.12.23
         version: 4.12.23
+      jose:
+        specifier: ^6.2.3
+        version: 6.2.3
       nodemailer:
         specifier: ^8.0.10
         version: 8.0.10
       pg:
         specifier: ^8.21.0
         version: 8.21.0
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3

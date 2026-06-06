@@ -43,5 +43,20 @@ export const orgAwsCredentials = pgTable("org_aws_credentials", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const projectSecrets = pgTable("project_secrets", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id")
+    .notNull()
+    .unique()
+    .references(() => project.id, { onDelete: "cascade" }),
+  jwtSecretEncrypted: text("jwt_secret_encrypted").notNull(),
+  anonKeyEncrypted: text("anon_key_encrypted").notNull(),
+  serviceRoleKeyEncrypted: text("service_role_key_encrypted").notNull(),
+  secretKeyBaseEncrypted: text("secret_key_base_encrypted").notNull(),
+  dashboardPasswordEncrypted: text("dashboard_password_encrypted").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type Project = typeof project.$inferSelect;
 export type OrgAwsCredentials = typeof orgAwsCredentials.$inferSelect;
+export type ProjectSecrets = typeof projectSecrets.$inferSelect;
