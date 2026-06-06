@@ -15,6 +15,13 @@
       "when": 1780763843386,
       "tag": "0001_glossy_black_bird",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780767174204,
+      "tag": "0002_tidy_raza",
+      "breakpoints": true
     }
   ]
 }
