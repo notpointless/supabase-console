@@ -4,7 +4,7 @@ import { buildStack } from "../src/projects/stack/compose";
 
 const input = {
   project: { ref: "abcdefghij1234567890", name: "My Project" },
-  secrets: { jwtSecret: "j".repeat(40), anonKey: "anon.jwt.token", serviceRoleKey: "service.jwt.token", secretKeyBase: "b".repeat(64), dashboardPassword: "dashpw" },
+  secrets: { jwtSecret: "j".repeat(40), anonKey: "anon.jwt.token", serviceRoleKey: "service.jwt.token", secretKeyBase: "b".repeat(64), dashboardPassword: "dashpw", vaultEncKey: "v".repeat(32), pgMetaCryptoKey: "m".repeat(32) },
   dbPassword: "dbpw",
   ports: { kongHttp: 18000, kongHttps: 18443, db: 15432 },
   urls: { apiExternalUrl: "http://localhost:18000", siteUrl: "http://localhost:3000", supabasePublicUrl: "http://localhost:18000" },
@@ -36,5 +36,8 @@ describe("buildStack", () => {
     expect(env.SUPABASE_PUBLIC_URL).toBe("http://localhost:18000");
     expect(env.POSTGRES_DB).toBe("postgres");
     expect(env.POSTGRES_PORT).toBe("15432");
+    // Per-project crypto keys must override any default
+    expect(env.VAULT_ENC_KEY).toBe("v".repeat(32));
+    expect(env.PG_META_CRYPTO_KEY).toBe("m".repeat(32));
   });
 });

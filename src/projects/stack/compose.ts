@@ -24,6 +24,8 @@ export function buildStack(input: BuildStackInput): { composeYaml: string; env: 
     SERVICE_ROLE_KEY: input.secrets.serviceRoleKey,
     SECRET_KEY_BASE: input.secrets.secretKeyBase,
     DASHBOARD_PASSWORD: input.secrets.dashboardPassword,
+    VAULT_ENC_KEY: input.secrets.vaultEncKey,
+    PG_META_CRYPTO_KEY: input.secrets.pgMetaCryptoKey,
     KONG_HTTP_PORT: String(input.ports.kongHttp),
     KONG_HTTPS_PORT: String(input.ports.kongHttps),
     POSTGRES_PORT: String(input.ports.db),

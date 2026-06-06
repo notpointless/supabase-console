@@ -24,5 +24,10 @@ describe("project secrets generation", () => {
     const svc = await jwtVerify(a.serviceRoleKey, new TextEncoder().encode(a.jwtSecret));
     expect(anon.payload.role).toBe("anon");
     expect(svc.payload.role).toBe("service_role");
+    // Per-project crypto keys — 32 hex chars (16 bytes each)
+    expect(a.vaultEncKey).toMatch(/^[0-9a-f]{32}$/);
+    expect(a.pgMetaCryptoKey).toMatch(/^[0-9a-f]{32}$/);
+    expect(a.vaultEncKey).not.toBe(b.vaultEncKey);
+    expect(a.pgMetaCryptoKey).not.toBe(b.pgMetaCryptoKey);
   });
 });

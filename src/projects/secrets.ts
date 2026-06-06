@@ -11,6 +11,8 @@ export interface ProjectSecretValues {
   serviceRoleKey: string;
   secretKeyBase: string;
   dashboardPassword: string;
+  vaultEncKey: string;
+  pgMetaCryptoKey: string;
 }
 
 const TEN_YEARS_SECONDS = 60 * 60 * 24 * 365 * 10;
@@ -40,18 +42,28 @@ export async function generateProjectSecrets(): Promise<ProjectSecretValues> {
     serviceRoleKey,
     secretKeyBase: randomBytes(32).toString("hex"),
     dashboardPassword: randomBytes(18).toString("base64url"),
+    // 32 hex chars (16 bytes) — Supabase Vault requires a 32-character key
+    vaultEncKey: randomBytes(16).toString("hex"),
+    pgMetaCryptoKey: randomBytes(16).toString("hex"),
   };
 }
 
-export async function storeProjectSecrets(projectId: string, v: ProjectSecretValues): Promise<void> {
-  await db.insert(projectSecrets).values({
+/** Single source of truth for mapping ProjectSecretValues → encrypted DB columns. */
+export function encryptedSecretColumns(projectId: string, v: ProjectSecretValues) {
+  return {
     projectId,
     jwtSecretEncrypted: encrypt(v.jwtSecret),
     anonKeyEncrypted: encrypt(v.anonKey),
     serviceRoleKeyEncrypted: encrypt(v.serviceRoleKey),
     secretKeyBaseEncrypted: encrypt(v.secretKeyBase),
     dashboardPasswordEncrypted: encrypt(v.dashboardPassword),
-  });
+    vaultEncKeyEncrypted: encrypt(v.vaultEncKey),
+    pgMetaCryptoKeyEncrypted: encrypt(v.pgMetaCryptoKey),
+  };
+}
+
+export async function storeProjectSecrets(projectId: string, v: ProjectSecretValues): Promise<void> {
+  await db.insert(projectSecrets).values(encryptedSecretColumns(projectId, v));
 }
 
 export async function getProjectSecrets(projectId: string): Promise<ProjectSecretValues | undefined> {
@@ -63,5 +75,7 @@ export async function getProjectSecrets(projectId: string): Promise<ProjectSecre
     serviceRoleKey: decrypt(row.serviceRoleKeyEncrypted),
     secretKeyBase: decrypt(row.secretKeyBaseEncrypted),
     dashboardPassword: decrypt(row.dashboardPasswordEncrypted),
+    vaultEncKey: decrypt(row.vaultEncKeyEncrypted),
+    pgMetaCryptoKey: decrypt(row.pgMetaCryptoKeyEncrypted),
   };
 }

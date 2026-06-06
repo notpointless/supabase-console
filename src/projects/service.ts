@@ -7,7 +7,7 @@ import { isKnownRegion, isEc2Region } from "../regions";
 import { hasValidCredentials } from "../aws/credentials-service";
 import { getQueue } from "../jobs/queue";
 import { AppError } from "../http/error";
-import { generateProjectSecrets } from "./secrets";
+import { generateProjectSecrets, encryptedSecretColumns } from "./secrets";
 
 function generateRef(): string {
   let s = "";
@@ -55,14 +55,7 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
       dbPasswordEncrypted: encrypt(input.dbPassword),
       createdBy: input.createdBy,
     }).returning();
-    await tx.insert(projectSecrets).values({
-      projectId: row!.id,
-      jwtSecretEncrypted: encrypt(secrets.jwtSecret),
-      anonKeyEncrypted: encrypt(secrets.anonKey),
-      serviceRoleKeyEncrypted: encrypt(secrets.serviceRoleKey),
-      secretKeyBaseEncrypted: encrypt(secrets.secretKeyBase),
-      dashboardPasswordEncrypted: encrypt(secrets.dashboardPassword),
-    });
+    await tx.insert(projectSecrets).values(encryptedSecretColumns(row!.id, secrets));
   });
   await getQueue().enqueue("provision", { ref });
   return (await getProjectByRef(ref))!;

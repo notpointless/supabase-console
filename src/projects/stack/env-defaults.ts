@@ -13,9 +13,8 @@ export const STACK_ENV_DEFAULTS: Record<string, string> = {
   // Dashboard
   DASHBOARD_USERNAME: "supabase",
 
-  // Encryption keys (operator must override before first start)
-  VAULT_ENC_KEY: "your-32-character-encryption-key",
-  PG_META_CRYPTO_KEY: "your-encryption-key-32-chars-min",
+  // VAULT_ENC_KEY and PG_META_CRYPTO_KEY are intentionally absent here —
+  // they are set per-project in buildStack() from project secrets (randomBytes(16).toString("hex")).
 
   // Analytics / Logflare tokens (operator must override).
   // NOTE: analytics (Logflare) and vector services are not included in the current vendored

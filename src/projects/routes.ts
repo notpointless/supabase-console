@@ -148,6 +148,6 @@ projects.get("/api/v1/projects/:ref/api-keys", async (c) => {
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, row.organizationId, { project: ["content"] });
   const secrets = await getProjectSecrets(row.id);
-  if (!secrets) throw new AppError(404, "project_not_found", "Project secrets not found");
+  if (!secrets) throw new AppError(404, "project_secrets_not_found", "Project secrets not found");
   return c.json({ anonKey: secrets.anonKey, serviceRoleKey: secrets.serviceRoleKey });
 });

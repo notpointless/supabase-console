@@ -54,6 +54,8 @@ export const projectSecrets = pgTable("project_secrets", {
   serviceRoleKeyEncrypted: text("service_role_key_encrypted").notNull(),
   secretKeyBaseEncrypted: text("secret_key_base_encrypted").notNull(),
   dashboardPasswordEncrypted: text("dashboard_password_encrypted").notNull(),
+  vaultEncKeyEncrypted: text("vault_enc_key_encrypted").notNull(),
+  pgMetaCryptoKeyEncrypted: text("pg_meta_crypto_key_encrypted").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
