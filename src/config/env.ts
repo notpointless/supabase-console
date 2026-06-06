@@ -6,6 +6,9 @@ const schema = z.object({
   BETTER_AUTH_URL: z.string().url(),
   PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  SMTP_URL: z.string().optional(),
+  MAIL_FROM: z.string().optional(),
+  APP_URL: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof schema>;
