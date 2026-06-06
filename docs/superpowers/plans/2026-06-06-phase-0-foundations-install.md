@@ -2,23 +2,26 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stand up the `supabase-console` control plane skeleton with first-run install that creates an invite-only admin account and a working session model.
+**Goal:** Stand up the `supabase-console` control plane skeleton with first-run install that creates an invite-only admin account and a working session model, with the install/identity logic packaged as a custom better-auth plugin.
 
-**Architecture:** A Node service (Hono HTTP + Zod validation) backed by Postgres via Drizzle. Authentication is delegated to better-auth (email/password + httpOnly sessions), with the `admin` and `organization` plugins registered so their tables ship in the first migration. Public sign-up is blocked via a better-auth `databaseHooks` gate; the first admin is bootstrapped through a race-safe install endpoint. The Hono app is built in `app.ts` (no port binding) so integration tests can run it in-process against a throwaway Postgres (Testcontainers).
+**Architecture:** A Node service (Hono HTTP + Zod validation) backed by Postgres via Drizzle. Authentication is delegated to better-auth (email/password + httpOnly sessions). A **custom `consolePlugin()`** owns the install domain: it declares the `installation` table (plugin `schema`), mounts `/install/status` and `/install/setup` endpoints under `/api/auth/install/*`, and registers a `before` hook that blocks public sign-up. The `admin` and `organization` plugins are also registered so their tables ship in the first migration and our Owner/Administrator/Developer roles are defined. The Hono app is built in `app.ts` (no port binding) so integration tests run it in-process against a throwaway Postgres (Testcontainers).
 
-**Tech Stack:** TypeScript (strict, ESM), pnpm, Hono, Zod, Drizzle ORM + drizzle-kit, node-postgres (`pg`), better-auth, Vitest, `@testcontainers/postgresql`, tsx (dev), tsup (build).
+**Tech Stack:** TypeScript (strict, ESM), pnpm, Hono, Zod, Drizzle ORM + drizzle-kit, node-postgres (`pg`), better-auth (+ `@better-auth/cli`), Vitest, `@testcontainers/postgresql`, tsx (dev), tsup (build).
 
 **Spec:** `docs/superpowers/specs/2026-06-06-phase-0-foundations-install-design.md`
 
-**Conventions:** Conventional Commits (contract §7). Commit after every green step. Per contract §0 the canonical entry point is the `pointless` CLI, but until the manifest is wired and validated we run the underlying pnpm scripts directly (this is the one allowed exception — bootstrapping the manifest itself). After Task 2, prefer `pointless <verb>` where available.
+**API verification:** The plugin APIs in this plan were checked against better-auth's docs (`https://better-auth.com/llms.txt` → concepts/plugins, concepts/database) and its `sign-up.ts` source. Confirmed: `createAuthEndpoint`/`createAuthMiddleware` from `better-auth/api`; plugin `schema` field types `string|number|boolean|date` with `required`/`defaultValue`/`references`; `hooks.before` `[{ matcher, handler }]`; `ctx.context.{internalAdapter, adapter, password}`. Note: `defaultValue` applies only in the JS layer (DB column stays optional). `setSessionCookie` / `internalAdapter.*` / `ctx.context.password.hash` are not in the prose docs but match better-auth's own `sign-up.ts` internals — resolve their import paths via TypeScript at implementation time.
+
+**Conventions:** Conventional Commits (contract §7). Commit after every green step. Per contract §0 the canonical entry point is the `pointless` CLI, but until the manifest is wired and validated we run the underlying pnpm scripts directly (the one allowed exception — bootstrapping the manifest itself).
 
 ---
 
-## Design refinements over the spec (read before starting)
+## Design decisions & refinements over the spec (read before starting)
 
-1. **Invite-only gate.** Instead of `emailAndPassword.disableSignUp`, we use a `databaseHooks.user.create.before` hook that throws `APIError("FORBIDDEN", { message: "Signup is disabled" })` when a user already exists. This blocks public sign-up after install while letting the first-admin bootstrap through, and Phase 1 will extend the same hook to allow invited emails.
-2. **`isInstalled()` derives from user existence**, not the marker row: `SELECT count(*) FROM "user" > 0`. This is race-safe and self-healing. The `installation` table still exists to hold `installed_at` and future instance settings, but it is not the authority for "installed".
-3. **Race-safe setup.** `setup()` runs inside a transaction that first takes a Postgres **transaction-level advisory lock** (`pg_advisory_xact_lock`), re-checks the user count, then performs the sign-up and writes the marker. Concurrent setup calls serialize on the lock; the loser sees a user already exists and returns 409.
+1. **Install is a better-auth plugin.** Rather than an `installation` table in our own Drizzle schema + install routes in Hono `/api/v1/*`, a custom `consolePlugin()` owns all of it. Consequence: **install endpoints move to `/api/auth/install/status` and `/api/auth/install/setup`** (under better-auth's base path), not `/api/v1/install/*` as the spec drafted. `/api/v1/me` and the install-gate middleware remain in our Hono layer.
+2. **Public sign-up is blocked unconditionally.** A plugin `before` hook matching `/sign-up/email` always throws `FORBIDDEN`. Users are only ever created by the install setup endpoint (Phase 0) or by invite acceptance (Phase 1, which will create users server-side). This is simpler and safer than a conditional gate — there is no window in which a stranger can self-register.
+3. **`isInstalled()` derives from user existence** (`SELECT count(*) FROM "user" > 0`), implemented with **raw SQL** so it does not import any generated table — this avoids an import cycle when `better-auth generate` loads `auth.ts`. The `installation` table holds `installed_at` + future settings but is not the authority for "installed".
+4. **Race-safe setup.** The setup endpoint takes a Postgres **advisory lock** (`pg_advisory_lock`) on a dedicated pool connection around the check-and-create critical section, so two concurrent setup calls cannot both create an admin.
 
 ---
 
@@ -30,21 +33,21 @@
 | `pointless.toml` | org-contract manifest (verbs, env, deploy target) |
 | `CLAUDE.md`, `README.md`, `.env.example`, `.gitignore` | contract scaffolding |
 | `src/config/env.ts` | Zod-validated env loader (typed `env`) |
-| `src/db/client.ts` | `pg` Pool + Drizzle client bound to the full schema |
-| `src/db/auth-schema.ts` | better-auth tables — **generated** by the better-auth CLI |
-| `src/db/schema.ts` | our `installation` table + re-export of `auth-schema` |
+| `src/db/client.ts` | `pg` Pool + Drizzle client bound to the schema |
+| `src/db/auth-schema.ts` | better-auth + plugin tables — **generated** by `@better-auth/cli` |
+| `src/db/schema.ts` | re-export of `auth-schema` (drizzle-kit entry) |
 | `src/db/migrations/` | drizzle-kit generated SQL |
+| `src/install/status.ts` | shared `isInstalled()` (raw count, no generated imports) |
 | `src/auth/permissions.ts` | access-control statement + Owner/Administrator/Developer roles |
-| `src/auth/auth.ts` | the `betterAuth(...)` instance (adapter, plugins, invite-only hook) |
-| `src/install/service.ts` | `isInstalled()`, `setup()` (advisory-locked) |
-| `src/install/routes.ts` | `GET /install/status`, `POST /install/setup` Hono sub-router |
+| `src/auth/console-plugin.ts` | the custom plugin: `installation` schema, install endpoints, sign-up block hook |
+| `src/auth/auth.ts` | the `betterAuth(...)` instance (adapter + plugins) |
 | `src/http/error.ts` | shared JSON error handler + `AppError` |
 | `src/http/install-gate.ts` | middleware: 409 on `/api/v1/*` before install |
 | `src/http/me.ts` | `GET /api/v1/me` |
 | `src/http/health.ts` | `GET /healthz` |
 | `src/app.ts` | composes the Hono app (no `listen`) |
 | `src/server.ts` | entrypoint: binds the port |
-| `tests/helpers/setup.ts` | Vitest setup file: starts Testcontainers Postgres, migrates, exposes `resetDb` |
+| `tests/helpers/setup.ts` | Vitest setup: starts Testcontainers Postgres, migrates, truncates between tests |
 | `tests/*.test.ts` | integration tests |
 
 ---
@@ -71,10 +74,12 @@
     "typecheck": "tsc --noEmit",
     "migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
-    "auth:generate": "better-auth generate --config src/auth/auth.ts --output src/db/auth-schema.ts -y"
+    "auth:generate": "npx @better-auth/cli generate --config src/auth/auth.ts --output src/db/auth-schema.ts --yes"
   }
 }
 ```
+
+> `auth:generate` flags target the current `@better-auth/cli`. If the installed CLI uses different flag names (e.g. it auto-detects `src/auth/auth.ts`), adjust — the intent is: read the auth config, emit a Drizzle schema for all registered plugins to `src/db/auth-schema.ts`.
 
 - [ ] **Step 2: Install dependencies**
 
@@ -83,7 +88,7 @@ Run:
 pnpm add hono @hono/node-server zod better-auth drizzle-orm pg
 pnpm add -D typescript tsx tsup vitest drizzle-kit @better-auth/cli @testcontainers/postgresql @types/node @types/pg eslint
 ```
-Expected: `node_modules/` populated, `pnpm-lock.yaml` created, `package.json` gains dependency versions.
+Expected: `node_modules/` populated, `pnpm-lock.yaml` created.
 
 - [ ] **Step 3: Create `tsconfig.json`**
 
@@ -97,7 +102,6 @@ Expected: `node_modules/` populated, `pnpm-lock.yaml` created, `package.json` ga
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "verbatimModuleSyntax": false,
     "noUncheckedIndexedAccess": true,
     "outDir": "dist",
     "rootDir": ".",
@@ -136,8 +140,6 @@ export default defineConfig({
   },
 });
 ```
-
-> `fileParallelism: false` so test files share one Postgres container start at a time rather than spinning up many in parallel on a dev laptop.
 
 - [ ] **Step 6: Create `.gitignore`**
 
@@ -187,9 +189,9 @@ optional = ["PORT", "LOG_LEVEL"]
 target = "none"
 ```
 
-> If `pointless` rejects the `[commands.run]` table shape or a no-op `deploy`, adjust to the CLI's actual schema — the intent is: standard verbs map to pnpm scripts, `migrate`/`db-generate`/`auth-generate` are custom verbs, deploy is a no-op for Phase 0.
+> If `pointless` rejects `[commands.run]` or a no-op `deploy`, adjust to the CLI's actual schema; the intent is: standard verbs → pnpm scripts, `migrate`/`db-generate`/`auth-generate` → custom verbs, deploy → no-op for Phase 0.
 
-- [ ] **Step 9: Create `CLAUDE.md`** (thin, per contract — only if the base file exists)
+- [ ] **Step 9: Create `CLAUDE.md`** (thin, per contract)
 
 ```md
 @.pointless/CLAUDE.base.md
@@ -198,9 +200,10 @@ target = "none"
 
 Phase 0 = foundations & install. See docs/superpowers/specs/ and docs/superpowers/plans/.
 Control plane = Node service (Hono + Drizzle + Postgres + better-auth). API-first; UI is Phase 4.
+Install + invite-only identity is a custom better-auth plugin (src/auth/console-plugin.ts).
 ```
 
-> Note: `.pointless/CLAUDE.base.md` is normally written by `pointless` on scaffold. If it does not exist yet, run the CLI's scaffold/sync to produce it, or omit the `@import` line until it does. Do **not** hand-author the base file.
+> `.pointless/CLAUDE.base.md` is written by `pointless` on scaffold. If it does not exist yet, run the CLI's scaffold/sync to produce it, or omit the `@import` line until it does. Never hand-author the base file.
 
 - [ ] **Step 10: Create `README.md`** (must start with `pointless` usage, contract §2)
 
@@ -212,10 +215,10 @@ Multi-tenant control plane for provisioning and managing Supabase instances.
 ## Usage
 
 ```bash
-pointless dev      # run locally with hot reload
-pointless test     # run the test suite
-pointless lint     # format + lint + typecheck
-pointless build    # produce release artifacts
+pointless dev           # run locally with hot reload
+pointless test          # run the test suite
+pointless lint          # format + lint + typecheck
+pointless build         # produce release artifacts
 pointless run migrate   # apply database migrations
 ```
 
@@ -223,7 +226,7 @@ pointless run migrate   # apply database migrations
 
 1. Copy `.env.example` to `.env` and fill in values.
 2. `pointless run migrate` to apply migrations.
-3. `pointless dev`, then POST to `/api/v1/install/setup` to create the first admin.
+3. `pointless dev`, then POST to `/api/auth/install/setup` to create the first admin.
 ```
 
 - [ ] **Step 11: Commit**
@@ -260,9 +263,7 @@ describe("parseEnv", () => {
   });
 
   it("throws when a required var is missing", () => {
-    expect(() => parseEnv({ BETTER_AUTH_SECRET: "x".repeat(32) })).toThrow(
-      /DATABASE_URL/,
-    );
+    expect(() => parseEnv({ BETTER_AUTH_SECRET: "x".repeat(32) })).toThrow(/DATABASE_URL/);
   });
 });
 ```
@@ -300,14 +301,10 @@ export function parseEnv(source: Record<string, string | undefined> = process.en
 export const env: Env = parseEnv();
 ```
 
-> `parseEnv` is pure (takes a source) so it is unit-testable without mutating `process.env`. The `env` singleton is what the app imports.
-
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pnpm vitest run tests/config.test.ts`
-Expected: PASS (2 tests).
-
-> This test file does not import `env` (the singleton), so Testcontainers setup is not required for it; it still loads `tests/helpers/setup.ts` (created in Task 4), which is fine.
+Expected: PASS (2 tests). (Loads `tests/helpers/setup.ts` from Task 4, which starts a container; this test does not depend on it but tolerates it.)
 
 - [ ] **Step 5: Commit**
 
@@ -318,14 +315,14 @@ git commit -m "feat: add zod-validated env loader"
 
 ---
 
-## Task 3: Database client + installation schema + auth-schema placeholder
+## Task 3: Database client + schema entry + auth-schema placeholder
 
 **Files:**
 - Create: `src/db/auth-schema.ts` (placeholder — regenerated in Task 5), `src/db/schema.ts`, `src/db/client.ts`, `drizzle.config.ts`
 
 - [ ] **Step 1: Create the auth-schema placeholder**
 
-The better-auth CLI will overwrite this in Task 5, but it must exist now so imports resolve.
+Overwritten by `pnpm auth:generate` in Task 5, but must exist now so imports resolve.
 
 ```ts
 // src/db/auth-schema.ts
@@ -333,21 +330,12 @@ The better-auth CLI will overwrite this in Task 5, but it must exist now so impo
 export {};
 ```
 
-- [ ] **Step 2: Create our schema with the `installation` table**
+- [ ] **Step 2: Create the schema entry (drizzle-kit reads this)**
 
 ```ts
 // src/db/schema.ts
-import { pgTable, boolean, timestamp } from "drizzle-orm/pg-core";
-
-// Single-row marker. `id` is a constant `true` with a unique primary key,
-// guaranteeing at most one installation row. Authority for "installed?" is the
-// user count (see install service); this table holds metadata + future settings.
-export const installation = pgTable("installation", {
-  id: boolean("id").primaryKey().default(true),
-  installedAt: timestamp("installed_at", { withTimezone: true }).notNull().defaultNow(),
-  allowPublicSignup: boolean("allow_public_signup").notNull().default(false),
-});
-
+// All tables (auth core + admin + organization + the consolePlugin's
+// `installation`) are generated into auth-schema.ts by `better-auth generate`.
 export * from "./auth-schema";
 ```
 
@@ -381,13 +369,13 @@ export default defineConfig({
 - [ ] **Step 5: Typecheck**
 
 Run: `pnpm typecheck`
-Expected: PASS (no type errors; `export {}` placeholder yields an empty re-export).
+Expected: PASS (empty re-export compiles).
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/db/ drizzle.config.ts
-git commit -m "feat: add drizzle client and installation schema"
+git commit -m "feat: add drizzle client and schema entry"
 ```
 
 ---
@@ -397,30 +385,27 @@ git commit -m "feat: add drizzle client and installation schema"
 **Files:**
 - Create: `tests/helpers/setup.ts`
 
-> Built before the install service so service/integration tests have a real Postgres. This file is referenced by `vitest.config.ts` `setupFiles`, so it runs before any test module is imported — meaning it sets `process.env` (DATABASE_URL etc.) before the app's singletons (`env`, `db`, `auth`) are constructed.
+> Referenced by `vitest.config.ts` `setupFiles`, so it runs before any test module is imported — meaning it sets `process.env` (DATABASE_URL etc.) before the app's singletons (`env`, `db`, `auth`) are constructed.
 
 - [ ] **Step 1: Write the setup file**
 
 ```ts
 // tests/helpers/setup.ts
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { beforeEach } from "vitest";
 
-let container: StartedPostgreSqlContainer | undefined;
-
 // Top-level await: runs once per test file, before the test module is imported.
-container = await new PostgreSqlContainer("postgres:16-alpine").start();
+const container = await new PostgreSqlContainer("postgres:16-alpine").start();
 
 process.env.DATABASE_URL = container.getConnectionUri();
 process.env.BETTER_AUTH_SECRET = "test-secret-test-secret-test-secret";
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 
-// Import the migrator AFTER env is set so the client binds to the container.
+// Import AFTER env is set so the client binds to the container.
 const { db, pool } = await import("../../src/db/client");
 const { migrate } = await import("drizzle-orm/node-postgres/migrator");
 await migrate(db, { migrationsFolder: "./src/db/migrations" });
 
-// Truncate all tables between tests for isolation.
 const TABLES = [
   "installation",
   "invitation",
@@ -437,12 +422,12 @@ beforeEach(async () => {
 });
 ```
 
-> The `migrate` call requires migrations to exist; the initial migration is generated in Task 5. Until then, `migrate` over an empty folder is a no-op (it will succeed with zero migrations). After Task 5 it creates all tables.
+> Until Task 5 generates migrations, `migrate` over an empty folder is a no-op (succeeds with zero migrations). After Task 5 it creates all tables. If a test runs before Task 5, the `TRUNCATE` in `beforeEach` would fail on missing tables — that is expected; Task 4's verification only runs the config test, which has no `beforeEach`-truncated tables of its own. Run full integration tests only after Task 5.
 
 - [ ] **Step 2: Verify the harness boots**
 
 Run: `pnpm vitest run tests/config.test.ts`
-Expected: PASS — confirms a container starts, migrations run (zero so far), and the existing config tests still pass. (Requires Docker running locally.)
+Expected: PASS — a container starts, zero migrations run, config tests pass. (Requires Docker running locally.)
 
 - [ ] **Step 3: Commit**
 
@@ -453,21 +438,36 @@ git commit -m "test: add testcontainers postgres harness"
 
 ---
 
-## Task 5: Auth instance, roles, and generated schema
+## Task 5: Roles, the console plugin, the auth instance, and generated schema
 
 **Files:**
-- Create: `src/auth/permissions.ts`, `src/auth/auth.ts`, `src/auth/index.ts`
-- Regenerate: `src/db/auth-schema.ts`
-- Create: `src/db/migrations/0000_init.sql` (via drizzle-kit)
+- Create: `src/install/status.ts`, `src/auth/permissions.ts`, `src/auth/console-plugin.ts`, `src/auth/auth.ts`, `src/auth/index.ts`
+- Regenerate: `src/db/auth-schema.ts`; Create: `src/db/migrations/0000_init.sql`
+- Test: `tests/install-plugin.test.ts`
 
-- [ ] **Step 1: Define the access-control roles**
+- [ ] **Step 1: Create the shared install-status helper**
+
+```ts
+// src/install/status.ts
+import { sql } from "drizzle-orm";
+import { db } from "../db/client";
+
+// Raw SQL so this file imports NO generated table — avoids an import cycle when
+// `better-auth generate` loads auth.ts. "installed" == at least one user exists.
+export async function isInstalled(): Promise<boolean> {
+  const { rows } = await db.execute<{ count: number }>(
+    sql`select count(*)::int as count from "user"`,
+  );
+  return (rows[0]?.count ?? 0) > 0;
+}
+```
+
+- [ ] **Step 2: Define the access-control roles**
 
 ```ts
 // src/auth/permissions.ts
 import { createAccessControl } from "better-auth/plugins/access";
 
-// Resources the control plane authorizes. `project` covers project lifecycle
-// and content; `billing` is a parity slot that maps to nothing in this product.
 const statement = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
@@ -498,210 +498,223 @@ export const developer = ac.newRole({
 });
 ```
 
-- [ ] **Step 2: Create the better-auth instance**
+- [ ] **Step 3: Write the console plugin**
+
+```ts
+// src/auth/console-plugin.ts
+import { createAuthEndpoint, createAuthMiddleware, APIError } from "better-auth/api";
+import { setSessionCookie } from "better-auth/cookies";
+import type { BetterAuthPlugin } from "better-auth";
+import { z } from "zod";
+import { pool } from "../db/client";
+import { isInstalled } from "../install/status";
+
+// Stable key for the advisory lock that serializes install attempts.
+const INSTALL_LOCK_KEY = 4711;
+
+export const consolePlugin = () => {
+  return {
+    id: "console",
+    schema: {
+      installation: {
+        fields: {
+          installedAt: { type: "date", required: true },
+          // defaultValue applies only in the JS layer; the DB column is optional.
+          // We always pass it explicitly in adapter.create, so this is safe.
+          allowPublicSignup: { type: "boolean", defaultValue: false },
+        },
+      },
+    },
+    endpoints: {
+      installStatus: createAuthEndpoint(
+        "/install/status",
+        { method: "GET" },
+        async (ctx) => {
+          return ctx.json({ installed: await isInstalled() });
+        },
+      ),
+      installSetup: createAuthEndpoint(
+        "/install/setup",
+        {
+          method: "POST",
+          body: z.object({
+            name: z.string().min(1),
+            email: z.string().email(),
+            password: z.string().min(8),
+          }),
+        },
+        async (ctx) => {
+          const client = await pool.connect();
+          try {
+            // Serialize concurrent setup calls across the check-and-create section.
+            await client.query("select pg_advisory_lock($1)", [INSTALL_LOCK_KEY]);
+
+            if (await isInstalled()) {
+              throw new APIError("CONFLICT", { message: "Instance is already installed" });
+            }
+
+            // Mirror better-auth's signUpEmail internals to create the first admin.
+            const hash = await ctx.context.password.hash(ctx.body.password);
+            const user = await ctx.context.internalAdapter.createUser({
+              email: ctx.body.email.toLowerCase(),
+              name: ctx.body.name,
+              role: "admin",
+              emailVerified: false,
+            });
+            await ctx.context.internalAdapter.linkAccount({
+              userId: user.id,
+              providerId: "credential",
+              accountId: user.id,
+              password: hash,
+            });
+
+            await ctx.context.adapter.create({
+              model: "installation",
+              data: { installedAt: new Date(), allowPublicSignup: false },
+            });
+
+            const session = await ctx.context.internalAdapter.createSession(user.id);
+            await setSessionCookie(ctx, { session, user });
+
+            return ctx.json({ user });
+          } finally {
+            await client.query("select pg_advisory_unlock($1)", [INSTALL_LOCK_KEY]);
+            client.release();
+          }
+        },
+      ),
+    },
+    hooks: {
+      before: [
+        {
+          // Public sign-up is never allowed; users come from install or invites.
+          matcher: (ctx) => ctx.path === "/sign-up/email",
+          handler: createAuthMiddleware(async () => {
+            throw new APIError("FORBIDDEN", { message: "Signup is disabled" });
+          }),
+        },
+      ],
+    },
+  } satisfies BetterAuthPlugin;
+};
+```
+
+> Import-path notes for the implementer: `createAuthEndpoint`, `createAuthMiddleware`, and `APIError` come from `better-auth/api`; `setSessionCookie` from `better-auth/cookies`. If the installed version re-exports these elsewhere, follow the type resolution — the usage (mirroring `signUpEmail`) is correct. `createSession(user.id)` is the documented single-arg form; an optional second `dontRememberMe` boolean exists if needed.
+
+- [ ] **Step 4: Create the better-auth instance**
 
 ```ts
 // src/auth/auth.ts
 import { betterAuth } from "better-auth";
-import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin, organization } from "better-auth/plugins";
-import { sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { env } from "../config/env";
 import { ac, owner, administrator, developer } from "./permissions";
+import { consolePlugin } from "./console-plugin";
 
 export const auth = betterAuth({
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
   database: drizzleAdapter(db, { provider: "pg" }),
   emailAndPassword: { enabled: true },
-  databaseHooks: {
-    user: {
-      create: {
-        before: async (user) => {
-          // Invite-only: allow creation only when no user exists yet (the
-          // first-admin bootstrap). Phase 1 extends this to allow invited emails.
-          const [{ count }] = await db.execute<{ count: number }>(
-            sql`select count(*)::int as count from "user"`,
-          );
-          if (count > 0) {
-            throw new APIError("FORBIDDEN", { message: "Signup is disabled" });
-          }
-          return { data: user };
-        },
-      },
-    },
-  },
   plugins: [
     admin(),
-    organization({
-      ac,
-      roles: { owner, administrator, developer },
-    }),
+    organization({ ac, roles: { owner, administrator, developer } }),
+    consolePlugin(),
   ],
 });
 
 export type Auth = typeof auth;
 ```
 
-- [ ] **Step 3: Re-export for ergonomics**
+- [ ] **Step 5: Re-export for ergonomics**
 
 ```ts
 // src/auth/index.ts
 export { auth, type Auth } from "./auth";
 ```
 
-- [ ] **Step 4: Generate the better-auth Drizzle schema**
+- [ ] **Step 6: Generate the better-auth Drizzle schema**
 
 Run: `pnpm auth:generate`
-Expected: `src/db/auth-schema.ts` is overwritten with `user`, `session`, `account`, `verification`, `organization`, `member`, `invitation` table definitions (plus admin-plugin fields on `user`). (Requires the `.env`/env vars to be loadable; ensure a local `.env` exists.)
+Expected: `src/db/auth-schema.ts` overwritten with `user`, `session`, `account`, `verification`, `organization`, `member`, `invitation`, and `installation` table definitions. (Requires a local `.env` with the three required vars so `auth.ts` loads.)
 
-- [ ] **Step 5: Generate the SQL migration**
+- [ ] **Step 7: Generate the SQL migration**
 
 Run: `pnpm db:generate`
-Expected: `src/db/migrations/0000_init.sql` created containing `CREATE TABLE` for all auth tables + `installation`. A `meta/` journal is written alongside.
+Expected: `src/db/migrations/0000_init.sql` created with `CREATE TABLE` for all tables; a `meta/` journal written.
 
-- [ ] **Step 6: Typecheck**
-
-Run: `pnpm typecheck`
-Expected: PASS — `schema.ts` now re-exports real tables; `client.ts` binds them.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add src/auth/ src/db/auth-schema.ts src/db/migrations/
-git commit -m "feat: configure better-auth with roles and invite-only gate"
-```
-
----
-
-## Task 6: Install service (TDD)
-
-**Files:**
-- Create: `src/install/service.ts`
-- Test: `tests/install-service.test.ts`
-
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 8: Write the plugin integration test**
 
 ```ts
-// tests/install-service.test.ts
+// tests/install-plugin.test.ts
 import { describe, it, expect } from "vitest";
-import { isInstalled, setup, AlreadyInstalledError } from "../src/install/service";
+import { auth } from "../src/auth";
 
-describe("install service", () => {
-  it("reports not installed on a fresh database", async () => {
-    expect(await isInstalled()).toBe(false);
-  });
+const headers = { "content-type": "application/json" };
+const post = (path: string, body: unknown) =>
+  auth.handler(new Request(`http://localhost:3000/api/auth${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  }));
+const get = (path: string) =>
+  auth.handler(new Request(`http://localhost:3000/api/auth${path}`));
 
-  it("setup creates the first admin and flips installed to true", async () => {
-    const res = await setup({
+describe("console plugin", () => {
+  it("reports not installed, then installed after setup", async () => {
+    expect(await (await get("/install/status")).json()).toEqual({ installed: false });
+
+    const res = await post("/install/setup", {
       name: "Admin",
       email: "admin@example.com",
       password: "supersecret123",
     });
+    expect(res.status).toBe(200);
     expect(res.headers.get("set-cookie")).toBeTruthy();
-    expect(await isInstalled()).toBe(true);
+
+    expect(await (await get("/install/status")).json()).toEqual({ installed: true });
   });
 
-  it("rejects a second setup with AlreadyInstalledError", async () => {
-    await setup({ name: "Admin", email: "admin@example.com", password: "supersecret123" });
-    await expect(
-      setup({ name: "Two", email: "two@example.com", password: "supersecret123" }),
-    ).rejects.toBeInstanceOf(AlreadyInstalledError);
+  it("rejects a second setup with 409", async () => {
+    await post("/install/setup", { name: "A", email: "a@example.com", password: "supersecret123" });
+    const res = await post("/install/setup", { name: "B", email: "b@example.com", password: "supersecret123" });
+    expect(res.status).toBe(409);
+  });
+
+  it("blocks public sign-up", async () => {
+    const res = await post("/sign-up/email", { name: "X", email: "x@example.com", password: "supersecret123" });
+    expect(res.status).toBe(403);
+  });
+
+  it("allows the created admin to sign in", async () => {
+    await post("/install/setup", { name: "Admin", email: "admin@example.com", password: "supersecret123" });
+    const res = await post("/sign-in/email", { email: "admin@example.com", password: "supersecret123" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("set-cookie")).toBeTruthy();
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 9: Run tests to verify they pass**
 
-Run: `pnpm vitest run tests/install-service.test.ts`
-Expected: FAIL — cannot find module `../src/install/service`.
+Run: `pnpm vitest run tests/install-plugin.test.ts`
+Expected: PASS (4 tests).
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 10: Typecheck + commit**
 
-```ts
-// src/install/service.ts
-import { sql } from "drizzle-orm";
-import { db } from "../db/client";
-import { installation } from "../db/schema";
-import { auth } from "../auth";
-
-export class AlreadyInstalledError extends Error {
-  constructor() {
-    super("Already installed");
-    this.name = "AlreadyInstalledError";
-  }
-}
-
-// Stable key for the advisory lock that serializes install attempts.
-const INSTALL_LOCK_KEY = 4711n;
-
-export async function userCount(): Promise<number> {
-  const [row] = await db.execute<{ count: number }>(
-    sql`select count(*)::int as count from "user"`,
-  );
-  return row?.count ?? 0;
-}
-
-export async function isInstalled(): Promise<boolean> {
-  return (await userCount()) > 0;
-}
-
-export interface SetupInput {
-  name: string;
-  email: string;
-  password: string;
-}
-
-/**
- * Creates the first admin. Race-safe: serializes concurrent callers on a
- * transaction-level advisory lock, re-checks the user count inside the lock,
- * then signs the user up and writes the installation marker.
- * Returns the better-auth Response (carries the Set-Cookie session header).
- */
-export async function setup(input: SetupInput): Promise<Response> {
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(${INSTALL_LOCK_KEY})`);
-
-    const [row] = await tx.execute<{ count: number }>(
-      sql`select count(*)::int as count from "user"`,
-    );
-    if ((row?.count ?? 0) > 0) {
-      throw new AlreadyInstalledError();
-    }
-
-    const response = await auth.api.signUpEmail({
-      body: { name: input.name, email: input.email, password: input.password },
-      asResponse: true,
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to create admin (status ${response.status})`);
-    }
-
-    await tx.insert(installation).values({}).onConflictDoNothing();
-    return response;
-  });
-}
-```
-
-> Note: `signUpEmail` runs on the pool (not `tx`), so the new user is committed independently — fine, because `isInstalled()` derives from the user count. The advisory lock still serializes setup callers correctly.
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `pnpm vitest run tests/install-service.test.ts`
-Expected: PASS (3 tests).
-
-- [ ] **Step 5: Commit**
+Run: `pnpm typecheck`
+Expected: PASS.
 
 ```bash
-git add src/install/service.ts tests/install-service.test.ts
-git commit -m "feat: add race-safe install service"
+git add src/auth/ src/install/status.ts src/db/auth-schema.ts src/db/migrations/ tests/install-plugin.test.ts
+git commit -m "feat: add console plugin with install endpoints and signup block"
 ```
 
 ---
 
-## Task 7: HTTP error handling
+## Task 6: HTTP error handling
 
 **Files:**
 - Create: `src/http/error.ts`
@@ -719,7 +732,7 @@ describe("error handler", () => {
   const app = new Hono();
   app.onError(onError);
   app.get("/boom", () => {
-    throw new AppError(409, "already_installed", "Already installed");
+    throw new AppError(409, "not_installed", "Instance is not installed");
   });
   app.get("/oops", () => {
     throw new Error("kaboom");
@@ -729,7 +742,7 @@ describe("error handler", () => {
     const res = await app.request("/boom");
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({
-      error: { code: "already_installed", message: "Already installed" },
+      error: { code: "not_installed", message: "Instance is not installed" },
     });
   });
 
@@ -791,10 +804,10 @@ git commit -m "feat: add structured http error handler"
 
 ---
 
-## Task 8: Health, me, and install-gate; compose the app
+## Task 7: Health, me, install-gate; compose the app
 
 **Files:**
-- Create: `src/http/health.ts`, `src/http/me.ts`, `src/http/install-gate.ts`, `src/install/routes.ts`, `src/app.ts`
+- Create: `src/http/health.ts`, `src/http/me.ts`, `src/http/install-gate.ts`, `src/app.ts`
 - Test: `tests/app.test.ts`
 
 - [ ] **Step 1: Write the failing integration test**
@@ -817,44 +830,27 @@ describe("app", () => {
     expect(await res.json()).toEqual({ status: "ok" });
   });
 
-  it("install status starts false and /api/v1/me is gated to 409 before install", async () => {
-    expect(await (await app.request("/api/v1/install/status")).json()).toEqual({ installed: false });
+  it("gates /api/v1/me to 409 before install", async () => {
     const me = await app.request("/api/v1/me");
     expect(me.status).toBe(409);
     expect((await me.json()).error.code).toBe("not_installed");
   });
 
-  it("setup creates the admin, returns a session cookie, and flips status", async () => {
-    const res = await app.request(
-      "/api/v1/install/setup",
+  it("install status + setup work through the mounted auth handler", async () => {
+    expect(await (await app.request("/api/auth/install/status")).json()).toEqual({ installed: false });
+    const setup = await app.request(
+      "/api/auth/install/setup",
       json({ name: "Admin", email: "admin@example.com", password: "supersecret123" }),
     );
-    expect(res.status).toBe(200);
-    expect(res.headers.get("set-cookie")).toBeTruthy();
-    expect(await (await app.request("/api/v1/install/status")).json()).toEqual({ installed: true });
+    expect(setup.status).toBe(200);
+    expect(await (await app.request("/api/auth/install/status")).json()).toEqual({ installed: true });
   });
 
-  it("rejects a second setup with 409 already_installed", async () => {
-    await app.request("/api/v1/install/setup", json({ name: "A", email: "a@example.com", password: "supersecret123" }));
-    const res = await app.request(
-      "/api/v1/install/setup",
-      json({ name: "B", email: "b@example.com", password: "supersecret123" }),
+  it("logs in and returns the user from /api/v1/me after install", async () => {
+    await app.request(
+      "/api/auth/install/setup",
+      json({ name: "Admin", email: "admin@example.com", password: "supersecret123" }),
     );
-    expect(res.status).toBe(409);
-    expect((await res.json()).error.code).toBe("already_installed");
-  });
-
-  it("blocks public sign-up after install", async () => {
-    await app.request("/api/v1/install/setup", json({ name: "A", email: "a@example.com", password: "supersecret123" }));
-    const res = await app.request(
-      "/api/auth/sign-up/email",
-      json({ name: "Intruder", email: "intruder@example.com", password: "supersecret123" }),
-    );
-    expect(res.ok).toBe(false);
-  });
-
-  it("logs in and returns the user from /api/v1/me", async () => {
-    await app.request("/api/v1/install/setup", json({ name: "Admin", email: "admin@example.com", password: "supersecret123" }));
     const login = await app.request(
       "/api/auth/sign-in/email",
       json({ email: "admin@example.com", password: "supersecret123" }),
@@ -905,16 +901,11 @@ me.get("/api/v1/me", async (c) => {
 ```ts
 // src/http/install-gate.ts
 import { createMiddleware } from "hono/factory";
-import { isInstalled } from "../install/service";
+import { isInstalled } from "../install/status";
 import { AppError } from "./error";
 
-// Applied to /api/v1/* except the install routes. Returns 409 before install
-// so the UI knows to redirect to /install/setup.
+// Applied to /api/v1/*. Returns 409 before install so the UI redirects to setup.
 export const installGate = createMiddleware(async (c, next) => {
-  const path = c.req.path;
-  if (path.startsWith("/api/v1/install")) {
-    return next();
-  }
   if (!(await isInstalled())) {
     throw new AppError(409, "not_installed", "Instance is not installed");
   }
@@ -922,45 +913,7 @@ export const installGate = createMiddleware(async (c, next) => {
 });
 ```
 
-- [ ] **Step 6: Create the install routes**
-
-```ts
-// src/install/routes.ts
-import { Hono } from "hono";
-import { z } from "zod";
-import { isInstalled, setup, AlreadyInstalledError } from "./service";
-import { AppError } from "../http/error";
-
-const setupSchema = z.object({
-  name: z.string().min(1),
-  email: z.string().email(),
-  password: z.string().min(8),
-});
-
-export const install = new Hono();
-
-install.get("/api/v1/install/status", async (c) => {
-  return c.json({ installed: await isInstalled() });
-});
-
-install.post("/api/v1/install/setup", async (c) => {
-  const parsed = setupSchema.safeParse(await c.req.json().catch(() => null));
-  if (!parsed.success) {
-    throw new AppError(400, "validation_error", "Invalid setup payload", parsed.error.flatten());
-  }
-  try {
-    // better-auth Response carries Set-Cookie; return it directly.
-    return await setup(parsed.data);
-  } catch (err) {
-    if (err instanceof AlreadyInstalledError) {
-      throw new AppError(409, "already_installed", "Instance is already installed");
-    }
-    throw err;
-  }
-});
-```
-
-- [ ] **Step 7: Compose the app**
+- [ ] **Step 6: Compose the app**
 
 ```ts
 // src/app.ts
@@ -970,37 +923,35 @@ import { onError } from "./http/error";
 import { installGate } from "./http/install-gate";
 import { health } from "./http/health";
 import { me } from "./http/me";
-import { install } from "./install/routes";
 
 export const app = new Hono();
 
 app.onError(onError);
 
-// Health and better-auth are exempt from the install gate.
+// Health and better-auth (incl. /api/auth/install/*) are not gated.
 app.route("/", health);
 app.on(["POST", "GET"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
-// Everything else under /api/v1 is gated until install completes.
+// Everything under /api/v1 is gated until install completes.
 app.use("/api/v1/*", installGate);
-app.route("/", install);
 app.route("/", me);
 ```
 
-- [ ] **Step 8: Run tests to verify they pass**
+- [ ] **Step 7: Run tests to verify they pass**
 
 Run: `pnpm vitest run tests/app.test.ts`
-Expected: PASS (6 tests).
+Expected: PASS (4 tests).
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/http/ src/install/routes.ts src/app.ts tests/app.test.ts
-git commit -m "feat: compose hono app with install, me, health, and gate"
+git add src/http/ src/app.ts tests/app.test.ts
+git commit -m "feat: compose hono app with me, health, and install gate"
 ```
 
 ---
 
-## Task 9: Server entrypoint
+## Task 8: Server entrypoint
 
 **Files:**
 - Create: `src/server.ts`
@@ -1026,7 +977,7 @@ Expected: `dist/server.js` produced, no errors.
 - [ ] **Step 3: Smoke-test boot (manual, requires a real Postgres + `.env`)**
 
 Run: `pnpm migrate && pnpm dev`
-Expected: logs `supabase-console listening on http://localhost:3000`. `curl localhost:3000/healthz` → `{"status":"ok"}`; `curl localhost:3000/api/v1/install/status` → `{"installed":false}`.
+Expected: logs the listening line. `curl localhost:3000/healthz` → `{"status":"ok"}`; `curl localhost:3000/api/auth/install/status` → `{"installed":false}`.
 
 - [ ] **Step 4: Commit**
 
@@ -1037,23 +988,22 @@ git commit -m "feat: add node server entrypoint"
 
 ---
 
-## Task 10: Final verification
+## Task 9: Final verification
 
 - [ ] **Step 1: Run the full suite**
 
 Run: `pnpm test`
-Expected: all suites green (config, error, install-service, app). Requires Docker for Testcontainers.
+Expected: all suites green (config, install-plugin, error, app). Requires Docker.
 
 - [ ] **Step 2: Lint + typecheck**
 
 Run: `pnpm lint && pnpm typecheck`
-Expected: clean. (If ESLint is unconfigured, add a minimal `eslint.config.js` flat config for TS, or set `lint` to `pnpm typecheck` only and note it — do not leave `lint` broken.)
+Expected: clean. If ESLint is unconfigured, add a minimal flat `eslint.config.js` for TS or set `lint` to `pnpm typecheck` only — do not leave `lint` broken.
 
 - [ ] **Step 3: Confirm contract alignment**
 
-Verify manually:
 - `pointless.toml [env]` and `.env.example` list the same vars (contract §6). ✓
-- No `.env` or secrets committed (`git status` clean of secrets). ✓
+- No `.env`/secrets committed. ✓
 - `installation`, `user`, `session`, `account`, `verification`, `organization`, `member`, `invitation` all present in `src/db/migrations/0000_init.sql`. ✓
 
 - [ ] **Step 4: Commit any fixups**
@@ -1067,13 +1017,14 @@ git commit -m "chore: phase 0 final verification fixups"
 
 ## Definition of done
 
-- `pnpm test` (or `pointless test`) passes: install status transitions, setup happy path + session cookie, second-setup 409, public sign-up blocked, login + `/api/v1/me`, install-gate 409-before / pass-after.
+- `pnpm test` (or `pointless test`) passes: install status transitions, setup happy path + session cookie, second-setup 409, public sign-up blocked (403), login + `/api/v1/me`, install-gate 409-before / pass-after.
 - `pnpm lint && pnpm typecheck` clean.
 - Manifest and `.env.example` agree on env vars; no secrets in git.
-- better-auth `organization` schema present in the initial migration (unused until Phase 1).
-- App boots and serves `/healthz` and `/api/v1/install/status`.
+- `installation` + better-auth/organization tables present in the initial migration.
+- App boots and serves `/healthz` and `/api/auth/install/status`.
 
 ## Notes carried to Phase 1
 
-- Extend the `databaseHooks.user.create.before` gate to allow emails with a pending `invitation` (so invitees can set a password), in addition to the zero-user bootstrap.
-- Wire the organization plugin's create/invite/settings endpoints into `/api/v1` and enforce the `owner`/`administrator`/`developer` roles defined in `src/auth/permissions.ts`.
+- Extend `consolePlugin` (or a new `invitePlugin`) so invite acceptance creates users server-side via `internalAdapter` — the `/sign-up/email` block stays in place; invited users never use public sign-up.
+- Wire the organization plugin's create/invite/settings endpoints into the product API and enforce the `owner`/`administrator`/`developer` roles from `src/auth/permissions.ts`.
+- If the install API surface should live under `/api/v1` for UI consistency, add thin `/api/v1/install/*` Hono routes that proxy to `auth.api.installStatus` / `auth.api.installSetup`.
