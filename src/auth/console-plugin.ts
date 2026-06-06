@@ -5,6 +5,7 @@ import type { BetterAuthPlugin } from "better-auth";
 import { z } from "zod";
 import { pool } from "../db/client";
 import { isInstalled } from "../install/status";
+import { generateOrgSlug } from "./org-fields";
 
 // Arbitrary app-wide-unique key for the Postgres advisory lock that serializes
 // the one-time install setup across concurrent/competing callers.
@@ -111,6 +112,17 @@ export const consolePlugin = () => {
           matcher: (ctx) => ctx.path === "/sign-up/email",
           handler: createAuthMiddleware(async () => {
             throw new APIError("FORBIDDEN", { message: "Signup is disabled" });
+          }),
+        },
+        {
+          // Auto-generate a slug for org creation when the client doesn't supply one.
+          matcher: (ctx) => ctx.path === "/organization/create",
+          handler: createAuthMiddleware(async (ctx) => {
+            const body = ctx.body as Record<string, unknown> | undefined;
+            if (body && (typeof body.slug !== "string" || body.slug.length === 0)) {
+              return { context: { body: { ...body, slug: generateOrgSlug() } } };
+            }
+            return;
           }),
         },
       ],

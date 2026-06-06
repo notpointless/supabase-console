@@ -5,6 +5,8 @@ import { db } from "../db/client";
 import { getEnv } from "../config/env";
 import { ac, owner, administrator, developer } from "./permissions";
 import { consolePlugin } from "./console-plugin";
+import { assertValidOrgFields } from "./org-fields";
+import { getMailer } from "../email/mailer";
 
 const env = getEnv();
 
@@ -18,7 +20,46 @@ export const auth = betterAuth({
   emailAndPassword: { enabled: true },
   plugins: [
     admin(),
-    organization({ ac, roles: { owner, administrator, developer } }),
+    organization({
+      ac,
+      roles: { owner, administrator, developer },
+      creatorRole: "owner",
+      allowUserToCreateOrganization: true,
+      requireEmailVerificationOnInvitation: false,
+      schema: {
+        organization: {
+          additionalFields: {
+            type: { type: "string", input: true, required: false, defaultValue: "personal" },
+            dataPrivacyLevel: {
+              type: "string",
+              input: true,
+              required: false,
+              defaultValue: "disabled",
+            },
+          },
+        },
+      },
+      organizationHooks: {
+        beforeCreateOrganization: async ({ organization }) => {
+          assertValidOrgFields(organization as { type?: unknown; dataPrivacyLevel?: unknown });
+          return { data: organization };
+        },
+        beforeUpdateOrganization: async ({ organization }) => {
+          assertValidOrgFields(organization as { type?: unknown; dataPrivacyLevel?: unknown });
+          return { data: organization };
+        },
+      },
+      sendInvitationEmail: async (data) => {
+        const base = env.APP_URL ?? env.BETTER_AUTH_URL;
+        await getMailer().sendInvite({
+          to: data.email,
+          acceptUrl: `${base}/accept-invite?invitationId=${data.id}`,
+          organizationName: data.organization.name,
+          role: Array.isArray(data.role) ? data.role.join(",") : String(data.role),
+          inviterEmail: data.inviter?.user?.email,
+        });
+      },
+    }),
     consolePlugin(),
   ],
 });
