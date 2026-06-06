@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll, beforeEach } from "vitest";
 import { app } from "../src/app";
 import { resetQueue, setQueue, GraphileQueue } from "../src/jobs/queue";
 import { startWorker } from "../src/jobs/worker";
+import { setComposeRunner, resetComposeRunner } from "../src/projects/stack/compose-runner";
 
 const json = (body: unknown, cookie = "") => {
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -12,8 +13,8 @@ const json = (body: unknown, cookie = "") => {
 let runner: Awaited<ReturnType<typeof startWorker>> | undefined;
 
 describe("real graphile worker", () => {
-  beforeEach(() => resetQueue());
-  afterAll(async () => { await runner?.stop?.(); });
+  beforeEach(() => { resetQueue(); resetComposeRunner(); setComposeRunner({ up: async () => {}, stop: async () => {}, start: async () => {}, down: async () => {} }); });
+  afterAll(async () => { await runner?.stop?.(); resetComposeRunner(); });
 
   it("provisions a project asynchronously via the real worker", async () => {
     setQueue(new GraphileQueue(process.env.DATABASE_URL!));

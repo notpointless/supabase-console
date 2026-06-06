@@ -1,9 +1,9 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db/client";
 import { project, organization, user } from "../src/db/schema";
 import { InlineQueue } from "../src/jobs/queue";
-import { resetProvisioner, setProvisioner } from "../src/projects/provisioner";
+import { resetProvisioner, setProvisioner, StubProvisioner } from "../src/projects/provisioner";
 import { encrypt } from "../src/crypto/secrets";
 
 async function seed(): Promise<{ ref: string }> {
@@ -20,6 +20,7 @@ async function seed(): Promise<{ ref: string }> {
 }
 
 describe("InlineQueue + provision task", () => {
+  beforeEach(() => { resetProvisioner(); setProvisioner(new StubProvisioner()); });
   afterEach(() => resetProvisioner());
 
   it("provision flips project to active with a connection", async () => {

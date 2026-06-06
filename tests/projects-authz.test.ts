@@ -3,6 +3,7 @@ import { app } from "../src/app";
 import { setQueue, resetQueue, InlineQueue } from "../src/jobs/queue";
 import { setMailer, resetMailer } from "../src/email/mailer";
 import { resetValidator } from "../src/aws/credential-validator";
+import { setProvisioner, resetProvisioner, StubProvisioner } from "../src/projects/provisioner";
 
 const json = (body: unknown, cookie = "") => {
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -27,7 +28,7 @@ async function addDeveloper(ownerCookie: string, orgId: string, email: string): 
 }
 
 describe("project authz", () => {
-  beforeEach(() => { resetQueue(); setQueue(new InlineQueue()); resetMailer(); resetValidator(); });
+  beforeEach(() => { resetQueue(); resetProvisioner(); setQueue(new InlineQueue()); resetMailer(); resetValidator(); setProvisioner(new StubProvisioner()); });
 
   it("a developer cannot create a project (403)", async () => {
     const ownerCookie = await installOwner();

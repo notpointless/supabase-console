@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { app } from "../src/app";
 import { setQueue, resetQueue, InlineQueue } from "../src/jobs/queue";
 import { setValidator, resetValidator } from "../src/aws/credential-validator";
+import { setProvisioner, resetProvisioner, StubProvisioner } from "../src/projects/provisioner";
 
 const json = (body: unknown, cookie = "") => {
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -18,7 +19,7 @@ async function org(cookie: string): Promise<string> {
 }
 
 describe("projects", () => {
-  beforeEach(() => { resetQueue(); resetValidator(); setQueue(new InlineQueue()); });
+  beforeEach(() => { resetQueue(); resetValidator(); resetProvisioner(); setQueue(new InlineQueue()); setProvisioner(new StubProvisioner()); });
 
   it("creates a shared project that becomes active with a connection, password never returned", async () => {
     const cookie = await owner();

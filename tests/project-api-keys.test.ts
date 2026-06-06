@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { app } from "../src/app";
 import { setQueue, resetQueue, InlineQueue } from "../src/jobs/queue";
 import { setMailer, resetMailer } from "../src/email/mailer";
+import { setProvisioner, resetProvisioner, StubProvisioner } from "../src/projects/provisioner";
 
 const json = (body: unknown, cookie = "") => {
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -20,7 +21,7 @@ async function addDeveloper(ownerCookie: string, orgId: string, email: string): 
 }
 
 describe("project api-keys", () => {
-  beforeEach(() => { resetQueue(); setQueue(new InlineQueue()); resetMailer(); });
+  beforeEach(() => { resetQueue(); resetProvisioner(); setQueue(new InlineQueue()); resetMailer(); setProvisioner(new StubProvisioner()); });
 
   it("returns anon + service_role to a member, never the jwt secret", async () => {
     const cookie = await owner();
