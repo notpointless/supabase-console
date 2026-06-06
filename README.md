@@ -1,6 +1,6 @@
 # supabase-console
 
-Multi-tenant control plane for provisioning and managing Supabase instances.
+Multi-tenant control panel for provisioning and managing Supabase instances.
 
 ## Usage
 
