@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin, organization, twoFactor, oidcProvider } from "better-auth/plugins";
 import { sso } from "@better-auth/sso";
+import { apiKey } from "@better-auth/api-key";
 import { db } from "../db/client";
 import { getEnv } from "../config/env";
 import { ac, owner, administrator, developer } from "./permissions";
@@ -83,6 +84,9 @@ export const auth = betterAuth({
     // Makes the console an OIDC provider so orgs can publish OAuth apps.
     // loginPage is where the provider redirects unauthenticated users mid-flow.
     oidcProvider({ loginPage: "/sign-in" }),
+    // Personal Access Tokens for /api/v1 auth (user-owned, metadata-enabled,
+    // default prefix "sbp_" — Supabase-style). Single default config.
+    apiKey({ enableMetadata: true, defaultPrefix: "sbp_" }),
     consolePlugin(),
   ],
 });

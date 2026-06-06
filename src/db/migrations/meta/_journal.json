@@ -78,6 +78,13 @@
       "when": 1780787652690,
       "tag": "0010_bored_professor_monster",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1780789679534,
+      "tag": "0011_normal_loki",
+      "breakpoints": true
     }
   ]
 }
