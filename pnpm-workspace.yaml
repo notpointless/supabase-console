@@ -5,3 +5,9 @@ allowBuilds:
   esbuild: true
   protobufjs: true
   ssh2: true
+# better-auth@1.6.14 / @better-auth/core@1.6.14 require better-call@1.3.5, but the
+# lagging @better-auth/cli@1.4.22 (devDep) pins better-call@1.1.8 and pnpm deduplicated
+# core onto 1.1.8 — which lacks kAPIErrorHeaderSymbol, crashing the runtime on import.
+# Force the version core actually needs.
+overrides:
+  better-call: 1.3.5
