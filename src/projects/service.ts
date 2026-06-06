@@ -1,0 +1,79 @@
+import { randomInt } from "node:crypto";
+import { eq } from "drizzle-orm";
+import { db } from "../db/client";
+import { project, type Project } from "../db/schema";
+import { encrypt } from "../crypto/secrets";
+import { isKnownRegion, isEc2Region } from "../regions";
+import { hasValidCredentials } from "../aws/credentials-service";
+import { getQueue } from "../jobs/queue";
+import { AppError } from "../http/error";
+
+function generateRef(): string {
+  let s = "";
+  for (let i = 0; i < 20; i++) s += String.fromCharCode(97 + randomInt(26));
+  return s;
+}
+
+export interface CreateProjectInput {
+  organizationId: string;
+  name: string;
+  region: string;
+  dbPassword: string;
+  postgresType?: "postgres" | "orioledb";
+  dataApiEnabled?: boolean;
+  autoExposeNewTables?: boolean;
+  autoEnableRls?: boolean;
+  createdBy: string;
+}
+
+export async function createProject(input: CreateProjectInput): Promise<Project> {
+  if (!isKnownRegion(input.region)) {
+    throw new AppError(400, "invalid_region", "Unknown region");
+  }
+  let infrastructureType = "shared";
+  if (isEc2Region(input.region)) {
+    if (!(await hasValidCredentials(input.organizationId))) {
+      throw new AppError(400, "ec2_unavailable", "EC2 region requires validated AWS credentials");
+    }
+    infrastructureType = "dedicated_ec2";
+  }
+  const ref = generateRef();
+  await db.insert(project).values({
+    ref,
+    organizationId: input.organizationId,
+    name: input.name,
+    region: input.region,
+    infrastructureType,
+    postgresType: input.postgresType ?? "postgres",
+    status: "provisioning",
+    dataApiEnabled: input.dataApiEnabled ?? true,
+    autoExposeNewTables: input.autoExposeNewTables ?? true,
+    autoEnableRls: input.autoEnableRls ?? true,
+    dbPasswordEncrypted: encrypt(input.dbPassword),
+    createdBy: input.createdBy,
+  });
+  await getQueue().enqueue("provision", { ref });
+  return (await getProjectByRef(ref))!;
+}
+
+export async function getProjectByRef(ref: string): Promise<Project | undefined> {
+  const [row] = await db.select().from(project).where(eq(project.ref, ref));
+  return row;
+}
+
+export async function listProjects(organizationId: string): Promise<Project[]> {
+  return db.select().from(project).where(eq(project.organizationId, organizationId));
+}
+
+export async function pauseProject(ref: string): Promise<void> {
+  await getQueue().enqueue("pause", { ref });
+}
+
+export async function resumeProject(ref: string): Promise<void> {
+  await getQueue().enqueue("resume", { ref });
+}
+
+export async function deleteProject(ref: string): Promise<void> {
+  await db.update(project).set({ status: "removing", updatedAt: new Date() }).where(eq(project.ref, ref));
+  await getQueue().enqueue("delete", { ref });
+}
