@@ -1,7 +1,18 @@
 import type { Project } from "../db/schema";
+import { SharedInfraProvisioner } from "./shared-infra-provisioner";
+
+export interface Connection {
+  host: string;
+  apiUrl?: string;
+  kongHttpPort?: number;
+  kongHttpsPort?: number;
+  dbPort?: number;
+  port?: number;
+  ref?: string;
+}
 
 export interface ProvisionResult {
-  connection: { host: string; port: number; ref: string };
+  connection: Connection;
 }
 
 export interface Provisioner {
@@ -22,6 +33,7 @@ export class StubProvisioner implements Provisioner {
 }
 
 let current: Provisioner | undefined;
+let overridden = false;
 
 export function getProvisioner(): Provisioner {
   if (!current) current = new StubProvisioner();
@@ -29,7 +41,14 @@ export function getProvisioner(): Provisioner {
 }
 export function setProvisioner(p: Provisioner): void {
   current = p;
+  overridden = true;
 }
 export function resetProvisioner(): void {
   current = undefined;
+  overridden = false;
+}
+
+export function getProvisionerFor(project: { infrastructureType: string }): Provisioner {
+  if (overridden) return getProvisioner();
+  return project.infrastructureType === "shared" ? new SharedInfraProvisioner() : new StubProvisioner();
 }
