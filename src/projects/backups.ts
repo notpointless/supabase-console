@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getEnv } from "../config/env";
 import type { Project } from "../db/schema";
@@ -84,4 +84,40 @@ export async function createBackup(project: Project): Promise<BackupInfo> {
     project_id: 0,
     status: "COMPLETED",
   };
+}
+
+// Restore a logical backup (pg_dump -Fc) into the project's database via pg_restore.
+// --clean drops + recreates objects first. pg_restore commonly exits 1 on benign
+// warnings (e.g. dropping objects that don't exist yet), so 0 and 1 both count as ok.
+export async function restoreBackup(project: Project, id: number): Promise<void> {
+  if (project.infrastructureType !== "shared") {
+    throw new Error("Restore is only managed for shared-infrastructure projects");
+  }
+  const file = backupFilePath(project.ref, id);
+  if (!file) throw new Error("Backup not found");
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("docker", [
+      "exec",
+      "-i",
+      `sb-${project.ref}-db-1`,
+      "pg_restore",
+      "-U",
+      "postgres",
+      "-d",
+      "postgres",
+      "--clean",
+      "--if-exists",
+      "--no-owner",
+      "--no-acl",
+    ]);
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0 || code === 1) resolve();
+      else reject(new Error(`pg_restore exited ${code}: ${stderr.slice(0, 400)}`));
+    });
+    createReadStream(file).pipe(child.stdin);
+  });
 }

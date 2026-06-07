@@ -23,7 +23,8 @@ import { project, organization, member } from "../db/schema";
 import { db } from "../db/client";
 import { eq, and } from "drizzle-orm";
 import { getProvisionerFor } from "./provisioner";
-import { listBackups, createBackup } from "./backups";
+import { listBackups, createBackup, backupFilePath, restoreBackup } from "./backups";
+import { readFileSync } from "node:fs";
 import { listBranches, createBranch, getBranchById, deleteBranch, resetBranch, mapBranch, branchSchemaDiff } from "./branches";
 import { mergeBranchToProduction } from "../integrations/github-deploy";
 import { readStandbyKeys, addStandbyKey, removeStandbyKey, setStandbyKeyStatus } from "./signing-keys-store";
@@ -301,6 +302,37 @@ projects.post("/api/v1/projects/:ref/backups", async (c) => {
     return c.json(backup);
   } catch (e) {
     throw new AppError(500, "backup_failed", e instanceof Error ? e.message : "Backup failed");
+  }
+});
+
+// Stream a logical backup's .dump file for download.
+projects.get("/api/v1/projects/:ref/backups/:id/download", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  const file = backupFilePath(ref, Number(c.req.param("id")));
+  if (!file) throw new AppError(404, "backup_not_found", "Backup not found");
+  const buf = readFileSync(file);
+  return c.body(buf as any, 200, {
+    "Content-Type": "application/octet-stream",
+    "Content-Disposition": `attachment; filename="${ref}-${c.req.param("id")}.dump"`,
+  });
+});
+
+// Restore a logical backup into the project's database (pg_restore --clean).
+projects.post("/api/v1/projects/:ref/backups/:id/restore", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  try {
+    await restoreBackup(row, Number(c.req.param("id")));
+    return c.json({ ok: true });
+  } catch (e) {
+    throw new AppError(500, "restore_failed", e instanceof Error ? e.message : "Restore failed");
   }
 });
 
