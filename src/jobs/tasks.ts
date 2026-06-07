@@ -21,10 +21,18 @@ export const taskList = {
         .set({ status: "active", connection: result.connection, failureReason: null, updatedAt: new Date() })
         .where(and(eq(project.ref, ref), eq(project.status, "provisioning")));
     } catch (e) {
-      await db
-        .update(project)
-        .set({ status: "failed", failureReason: e instanceof Error ? e.message : "provision failed", updatedAt: new Date() })
-        .where(eq(project.ref, ref));
+      // [console fork] A failed provision must NOT leave a project behind. Roll back
+      // fully: best-effort tear down any AWS/stack resources, then delete the row.
+      // (The reason is logged here since the record is gone.)
+      // eslint-disable-next-line no-console
+      console.error(`[provision] ${ref} failed — rolling back:`, e instanceof Error ? e.message : e);
+      try {
+        const current = await loadByRef(ref);
+        if (current) await getProvisionerFor(current).delete(current);
+      } catch {
+        // no instance recorded yet / nothing to tear down
+      }
+      await db.delete(project).where(eq(project.ref, ref));
     }
   },
   pause: async (payload: unknown): Promise<void> => {

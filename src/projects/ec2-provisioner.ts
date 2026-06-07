@@ -10,6 +10,8 @@ import {
   CreateSecurityGroupCommand,
   AuthorizeSecurityGroupIngressCommand,
   DescribeSecurityGroupsCommand,
+  DescribeVpcsCommand,
+  CreateDefaultVpcCommand,
 } from "@aws-sdk/client-ec2";
 
 import type { Provisioner, ProvisionResult, Connection } from "./provisioner";
@@ -20,8 +22,9 @@ import { buildStack } from "./stack/compose";
 import { getCredentials } from "../aws/credentials-service";
 
 // Default instance type for a dedicated project (compute size is not yet persisted
-// per-project; t3.large comfortably runs the full self-hosting stack).
-const DEFAULT_INSTANCE_TYPE = "t3.large";
+// per-project). Overridable via EC2_INSTANCE_TYPE; default t3.micro to minimize cost
+// (note: the full stack wants more RAM than micro has — bump for production workloads).
+const DEFAULT_INSTANCE_TYPE = process.env.EC2_INSTANCE_TYPE || "t3.micro";
 const SG_NAME = "supabase-console-dedicated";
 // [console fork] The self-host stack only works with OUR fork of supabase, not
 // upstream. Overridable via env for private forks / pinned branches.
@@ -57,6 +60,29 @@ async function latestAl2023Ami(ec2: EC2Client): Promise<string> {
 }
 
 /** Ensure a security group exists in the default VPC and return its id. */
+// Many AWS accounts (especially hardened/Organizations ones) have no default VPC.
+// Our launch uses the default VPC implicitly (SecurityGroupIds, no subnet), so create
+// one when it's missing — CreateDefaultVpc brings the VPC + public subnets + IGW + routes.
+async function ensureDefaultVpc(ec2: EC2Client): Promise<void> {
+  const existing = await ec2.send(
+    new DescribeVpcsCommand({ Filters: [{ Name: "isDefault", Values: ["true"] }] })
+  );
+  if (existing.Vpcs && existing.Vpcs.length > 0) return;
+  try {
+    await ec2.send(new CreateDefaultVpcCommand({}));
+  } catch (e) {
+    const err = e as { name?: string; message?: string };
+    if (err?.name === "DefaultVpcAlreadyExists") return;
+    if (err?.name === "UnauthorizedOperation" || /not authorized/i.test(err?.message ?? "")) {
+      throw new Error(
+        "This AWS account has no default VPC and the credentials lack ec2:CreateDefaultVpc. " +
+          "Grant that permission (or create a default VPC) so dedicated projects can launch."
+      );
+    }
+    throw e;
+  }
+}
+
 async function ensureSecurityGroup(ec2: EC2Client): Promise<string> {
   const existing = await ec2.send(
     new DescribeSecurityGroupsCommand({ Filters: [{ Name: "group-name", Values: [SG_NAME] }] })
@@ -175,6 +201,7 @@ export class Ec2Provisioner implements Provisioner {
       dataApiEnabled: project.dataApiEnabled,
     });
 
+    await ensureDefaultVpc(ec2);
     const [imageId, groupId] = await Promise.all([latestAl2023Ami(ec2), ensureSecurityGroup(ec2)]);
 
     const run = await ec2.send(
