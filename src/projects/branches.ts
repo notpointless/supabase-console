@@ -2,7 +2,7 @@ import { randomBytes, randomInt } from "node:crypto";
 import { spawn } from "node:child_process";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/client";
-import { project, projectSecrets, type Project } from "../db/schema";
+import { project, projectSecrets, projectRepoConnection, type Project } from "../db/schema";
 import { encrypt } from "../crypto/secrets";
 import { generateProjectSecrets, encryptedSecretColumns } from "./secrets";
 import { getProjectByRef } from "./service";
@@ -132,6 +132,61 @@ export async function createBranch(input: CreateBranchInput): Promise<Project> {
   });
   await getQueue().enqueue("provision_branch", { ref, withData: !!input.withData });
   return (await getProjectByRef(ref))!;
+}
+
+/**
+ * GitHub sync: keep preview branches in lock-step with a repo's pull requests.
+ * On PR opened, create a preview branch for the PR's head branch on every
+ * production project connected to that repo — and give the branch its own repo
+ * connection so the push webhook then deploys the PR's migrations to it. On PR
+ * closed, tear the branch down. Returns a per-project summary.
+ */
+export async function syncPullRequestBranch(
+  repoFullName: string,
+  action: string,
+  gitBranch: string
+): Promise<Array<{ project: string; action: string; branch?: string }>> {
+  // Production projects connected to this repo (a branch's own connection has the
+  // PR head ref as its branch; we only fan out from production projects here).
+  const conns = await db
+    .select()
+    .from(projectRepoConnection)
+    .where(eq(projectRepoConnection.repoFullName, repoFullName));
+  const results: Array<{ project: string; action: string; branch?: string }> = [];
+
+  for (const conn of conns) {
+    const [prod] = await db.select().from(project).where(eq(project.id, conn.projectId));
+    if (!prod || prod.parentProjectId) continue; // only fan out from production projects
+    const [existing] = await db
+      .select()
+      .from(project)
+      .where(and(eq(project.parentProjectId, prod.id), eq(project.gitBranch, gitBranch)));
+
+    if (action === "opened" || action === "reopened") {
+      if (existing) {
+        results.push({ project: prod.ref, action: "exists", branch: existing.ref });
+        continue;
+      }
+      const branch = await createBranch({
+        parentRef: prod.ref,
+        branchName: gitBranch,
+        gitBranch,
+        withData: false,
+        createdBy: prod.createdBy,
+      });
+      // Give the branch its own repo connection so push→deploy targets it.
+      await db
+        .insert(projectRepoConnection)
+        .values({ projectId: branch.id, repoFullName, branch: gitBranch });
+      results.push({ project: prod.ref, action: "created", branch: branch.ref });
+    } else if (action === "closed") {
+      if (existing) {
+        await deleteBranch(existing.id);
+        results.push({ project: prod.ref, action: "deleted", branch: existing.ref });
+      }
+    }
+  }
+  return results;
 }
 
 export async function deleteBranch(id: string): Promise<void> {

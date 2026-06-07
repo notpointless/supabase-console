@@ -21,6 +21,7 @@ import {
   setRepoConnection,
   deleteRepoConnection,
 } from "./github-deploy";
+import { syncPullRequestBranch } from "../projects/branches";
 
 export const integrations = new Hono();
 
@@ -433,7 +434,8 @@ integrations.post("/api/v1/github/webhook", async (c) => {
       throw new AppError(401, "invalid_signature", "Invalid webhook signature");
     }
   }
-  if (c.req.header("x-github-event") !== "push") return c.json({ ok: true, ignored: true });
+  const event = c.req.header("x-github-event");
+  if (event !== "push" && event !== "pull_request") return c.json({ ok: true, ignored: true });
   let payload: any;
   try {
     payload = JSON.parse(raw);
@@ -441,6 +443,18 @@ integrations.post("/api/v1/github/webhook", async (c) => {
     throw new AppError(400, "invalid_payload", "Invalid JSON");
   }
   const repoFullName: string | undefined = payload?.repository?.full_name;
+
+  // pull_request: open -> create a preview branch (+ its repo connection) on each
+  // connected production project; close -> tear it down. The push event below then
+  // deploys the PR's migrations to that branch.
+  if (event === "pull_request") {
+    const action: string = payload?.action ?? "";
+    const headRef: string | undefined = payload?.pull_request?.head?.ref;
+    if (!repoFullName || !headRef) return c.json({ ok: true, ignored: true });
+    const synced = await syncPullRequestBranch(repoFullName, action, headRef);
+    return c.json({ ok: true, synced });
+  }
+
   const pushedBranch: string | undefined = (payload?.ref ?? "").replace("refs/heads/", "");
   if (!repoFullName || !pushedBranch) return c.json({ ok: true, ignored: true });
 
