@@ -1,5 +1,8 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/client";
 import { project, projectSecrets, projectRepoConnection, type Project } from "../db/schema";
@@ -205,6 +208,68 @@ export async function resetBranch(id: string, withData = false): Promise<void> {
   if (!row) throw new AppError(404, "branch_not_found", "Branch not found");
   if (!row.parentProjectId) throw new AppError(400, "not_a_branch", "This project is not a preview branch");
   await getQueue().enqueue("seed_branch", { ref: row.ref, withData });
+}
+
+/** Dump a project's public schema (DDL only, normalized) for diffing. */
+function dumpPublicSchema(ref: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("docker", [
+      "exec",
+      `sb-${ref}-db-1`,
+      "pg_dump",
+      "-U",
+      "postgres",
+      "--schema=public",
+      "--schema-only",
+      "--no-owner",
+      "--no-acl",
+      "--no-comments",
+      "postgres",
+    ]);
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => (out += d.toString()));
+    child.stderr.on("data", (d) => (err += d.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(err.slice(0, 300) || `pg_dump exited ${code}`))));
+  });
+}
+
+/**
+ * Schema diff between a preview branch and its parent (production): a unified
+ * diff of each side's `public` schema DDL. Empty when identical. Returns "" for a
+ * production project (nothing to diff against).
+ */
+export async function branchSchemaDiff(branchId: string): Promise<string> {
+  const branch = await getBranchById(branchId);
+  if (!branch) throw new AppError(404, "branch_not_found", "Branch not found");
+  if (!branch.parentProjectId) return "";
+  const [parent] = await db.select().from(project).where(eq(project.id, branch.parentProjectId));
+  if (!parent) throw new AppError(404, "project_not_found", "Parent project not found");
+
+  const [prodSql, branchSql] = await Promise.all([
+    dumpPublicSchema(parent.ref),
+    dumpPublicSchema(branch.ref),
+  ]);
+  if (prodSql === branchSql) return "";
+
+  // Unified diff via `git diff --no-index` (robust + already a dependency).
+  const dir = mkdtempSync(join(tmpdir(), "branch-diff-"));
+  writeFileSync(join(dir, "production.sql"), prodSql);
+  writeFileSync(join(dir, "branch.sql"), branchSql);
+  return new Promise((resolve) => {
+    // Run from the temp dir with relative names so the diff header reads
+    // "a/production.sql"/"b/branch.sql" instead of absolute temp paths.
+    const git = spawn(
+      "git",
+      ["--no-pager", "diff", "--no-index", "--no-color", "production.sql", "branch.sql"],
+      { cwd: dir }
+    );
+    let out = "";
+    git.stdout.on("data", (d) => (out += d.toString()));
+    git.on("error", () => resolve(""));
+    git.on("close", () => resolve(out));
+  });
 }
 
 /**

@@ -24,7 +24,7 @@ import { db } from "../db/client";
 import { eq, and } from "drizzle-orm";
 import { getProvisionerFor } from "./provisioner";
 import { listBackups, createBackup } from "./backups";
-import { listBranches, createBranch, getBranchById, deleteBranch, resetBranch, mapBranch } from "./branches";
+import { listBranches, createBranch, getBranchById, deleteBranch, resetBranch, mapBranch, branchSchemaDiff } from "./branches";
 import { mergeBranchToProduction } from "../integrations/github-deploy";
 import { readStandbyKeys, addStandbyKey, removeStandbyKey, setStandbyKeyStatus } from "./signing-keys-store";
 import { assertMfaCompliant } from "../auth/mfa";
@@ -412,7 +412,8 @@ projects.get("/api/v1/branches/:id/diff", async (c) => {
   await requireSession(c);
   const branch = await loadBranchForRequest(c);
   await requirePermission(c, branch.organizationId, { project: ["content"] });
-  return c.body("", 200, { "Content-Type": "text/plain" });
+  const diff = await branchSchemaDiff(branch.id);
+  return c.body(diff, 200, { "Content-Type": "text/plain" });
 });
 
 // JWT signing keys for a project: the current asymmetric ES256 key (in use) and the
