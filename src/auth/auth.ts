@@ -5,6 +5,7 @@ import { APIError } from "better-auth/api";
 import { sso } from "@better-auth/sso";
 import { apiKey } from "@better-auth/api-key";
 import { db } from "../db/client";
+import { auditLog } from "../db/schema";
 import { getEnv } from "../config/env";
 import { ac, owner, administrator, developer } from "./permissions";
 import { consolePlugin } from "./console-plugin";
@@ -12,6 +13,22 @@ import { assertValidOrgFields } from "./org-fields";
 import { getMailer } from "../email/mailer";
 
 const env = getEnv();
+
+// Best-effort audit entry for member-management actions that flow through
+// better-auth (not the /api/v1 audit middleware). Never throws.
+async function recordOrgAudit(
+  organizationId: string | null | undefined,
+  actorUserId: string | null,
+  method: string,
+  path: string
+): Promise<void> {
+  if (!organizationId) return;
+  try {
+    await db.insert(auditLog).values({ actorUserId, organizationId, method, path, statusCode: 200 });
+  } catch {
+    // best-effort: audit logging must never break the underlying action
+  }
+}
 
 export const auth = betterAuth({
   appName: "Supabase Console",
@@ -89,6 +106,41 @@ export const auth = betterAuth({
               }. Delete all projects before deleting the organization.`,
             });
           }
+        },
+        // [console fork] Member-management actions go through better-auth (/api/auth/*),
+        // which the /api/v1 audit middleware doesn't see — so record them here so the
+        // org audit log captures invites, role changes, and member removals.
+        afterCreateInvitation: async ({ invitation, inviter, organization }: any) => {
+          await recordOrgAudit(
+            organization?.id,
+            inviter?.id ?? null,
+            "POST",
+            `Invited ${invitation?.email} as ${invitation?.role}`
+          );
+        },
+        afterUpdateMemberRole: async ({ member, previousRole, user, organization }: any) => {
+          await recordOrgAudit(
+            organization?.id,
+            null,
+            "PATCH",
+            `Changed role of ${user?.email ?? member?.userId} from ${previousRole} to ${member?.role}`
+          );
+        },
+        afterRemoveMember: async ({ member, user, organization }: any) => {
+          await recordOrgAudit(
+            organization?.id,
+            null,
+            "DELETE",
+            `Removed member ${user?.email ?? member?.userId ?? ""}`.trim()
+          );
+        },
+        afterAcceptInvitation: async ({ invitation, member, user, organization }: any) => {
+          await recordOrgAudit(
+            organization?.id,
+            user?.id ?? member?.userId ?? null,
+            "POST",
+            `Accepted invitation (${invitation?.role ?? member?.role ?? "member"})`
+          );
         },
       },
       sendInvitationEmail: async (data) => {
