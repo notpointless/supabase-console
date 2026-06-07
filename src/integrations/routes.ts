@@ -4,14 +4,25 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../db/client";
 import {
   project,
+  organization,
   orgGithubConnection,
   orgVercelConnection,
   projectRepoConnection,
   projectPrivatelinkAccount,
+  githubAuthorization,
+  githubConnection,
 } from "../db/schema";
 import { requireSession, requirePermission } from "../http/guards";
 import { AppError } from "../http/error";
-import { encrypt } from "../crypto/secrets";
+import { encrypt, decrypt } from "../crypto/secrets";
+import {
+  exchangeCode,
+  getGithubUser,
+  listRepositories,
+  getRepoById,
+  checkBranch,
+  githubAppConfigured,
+} from "./github-oauth";
 import { getProjectByRef } from "../projects/service";
 import { getQueue } from "../jobs/queue";
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -473,4 +484,219 @@ integrations.post("/api/v1/github/webhook", async (c) => {
     }
   }
   return c.json({ ok: true, deploying });
+});
+
+// ---------------------------------------------------------------------------
+// GitHub App OAuth integration ("Connect GitHub" in the dashboard). The browser
+// authorizes the App in a popup; GitHub redirects back with a `code`, which we
+// exchange for a user-access token, then list the App's repos and let the user
+// link one to a project. Created connections are mirrored into
+// org_github_connection + project_repo_connection so the deploy/webhook/branch
+// pipeline works with them unchanged.
+// ---------------------------------------------------------------------------
+async function currentUserGithubToken(
+  userId: string
+): Promise<{ token: string; login: string; githubUserId: number } | null> {
+  const [a] = await db.select().from(githubAuthorization).where(eq(githubAuthorization.userId, userId));
+  if (!a) return null;
+  return { token: decrypt(a.accessTokenEncrypted), login: a.githubLogin, githubUserId: a.githubUserId };
+}
+
+integrations.get("/api/v1/integrations/github/authorization", async (c) => {
+  const session = await requireSession(c);
+  const [a] = await db.select().from(githubAuthorization).where(eq(githubAuthorization.userId, session.user.id));
+  if (!a) return c.json(null);
+  return c.json({ id: a.githubUserId, sender_id: a.githubUserId, user_id: a.githubUserId });
+});
+
+integrations.post("/api/v1/integrations/github/authorization", async (c) => {
+  const session = await requireSession(c);
+  if (!githubAppConfigured()) {
+    throw new AppError(400, "github_not_configured", "GitHub App is not configured on this server.");
+  }
+  const body = (await c.req.json().catch(() => ({}))) as { code?: string };
+  const code = String(body?.code ?? "");
+  if (!code) throw new AppError(400, "validation_error", "code is required");
+  const token = await exchangeCode(code);
+  const ghUser = await getGithubUser(token);
+  await db
+    .insert(githubAuthorization)
+    .values({
+      userId: session.user.id,
+      githubUserId: ghUser.id,
+      githubLogin: ghUser.login,
+      accessTokenEncrypted: encrypt(token),
+    })
+    .onConflictDoUpdate({
+      target: githubAuthorization.userId,
+      set: { githubUserId: ghUser.id, githubLogin: ghUser.login, accessTokenEncrypted: encrypt(token), updatedAt: new Date() },
+    });
+  return c.json({ id: ghUser.id, sender_id: ghUser.id, user_id: ghUser.id }, 201);
+});
+
+integrations.delete("/api/v1/integrations/github/authorization", async (c) => {
+  const session = await requireSession(c);
+  await db.delete(githubAuthorization).where(eq(githubAuthorization.userId, session.user.id));
+  return c.json({ ok: true });
+});
+
+integrations.get("/api/v1/integrations/github/repositories", async (c) => {
+  const session = await requireSession(c);
+  const auth = await currentUserGithubToken(session.user.id);
+  if (!auth) throw new AppError(400, "github_not_authorized", "GitHub is not connected");
+  const repos = await listRepositories(auth.token);
+  return c.json({
+    partial_response_due_to_sso: false,
+    repositories: repos.map((r) => ({
+      id: r.id,
+      name: r.name,
+      installation_id: r.installation_id,
+      default_branch: r.default_branch,
+    })),
+  });
+});
+
+integrations.get("/api/v1/integrations/github/repositories/:repoId/branches/:branch", async (c) => {
+  const session = await requireSession(c);
+  const auth = await currentUserGithubToken(session.user.id);
+  if (!auth) throw new AppError(400, "github_not_authorized", "GitHub is not connected");
+  const repo = await getRepoById(auth.token, Number(c.req.param("repoId")));
+  if (!repo) throw new AppError(404, "repo_not_found", "Repository not found");
+  const name = await checkBranch(auth.token, repo.full_name, c.req.param("branch"));
+  if (!name) throw new AppError(404, "branch_not_found", "Branch not found");
+  return c.json({ name });
+});
+
+async function mapGithubConnection(
+  row: typeof githubConnection.$inferSelect,
+  login?: string,
+  ghUserId?: number
+) {
+  const [proj] = await db.select().from(project).where(eq(project.id, row.projectId));
+  return {
+    id: row.id,
+    inserted_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+    installation_id: row.installationId,
+    branch_limit: row.branchLimit,
+    new_branch_per_pr: row.newBranchPerPr,
+    supabase_changes_only: row.supabaseChangesOnly,
+    workdir: row.workdir,
+    project: { id: 0, name: proj?.name ?? "", ref: proj?.ref ?? "" },
+    repository: { id: row.repositoryId, name: row.repositoryName },
+    user: login ? { id: ghUserId ?? 0, primary_email: null, username: login } : null,
+  };
+}
+
+integrations.get("/api/v1/integrations/github/connections", async (c) => {
+  const session = await requireSession(c);
+  const orgId = c.req.query("organization_id");
+  if (!orgId) throw new AppError(400, "validation_error", "organization_id is required");
+  await requirePermission(c, orgId, MEMBER);
+  const rows = await db.select().from(githubConnection).where(eq(githubConnection.organizationId, orgId));
+  const auth = await currentUserGithubToken(session.user.id);
+  const connections = await Promise.all(rows.map((r) => mapGithubConnection(r, auth?.login, auth?.githubUserId)));
+  return c.json({ connections });
+});
+
+const createConnSchema = z.object({
+  installation_id: z.number(),
+  project_ref: z.string(),
+  repository_id: z.number(),
+  workdir: z.string().optional(),
+  new_branch_per_pr: z.boolean().optional(),
+  supabase_changes_only: z.boolean().optional(),
+  branch_limit: z.number().optional(),
+});
+
+integrations.post("/api/v1/integrations/github/connections", async (c) => {
+  const session = await requireSession(c);
+  const parsed = createConnSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) throw new AppError(400, "validation_error", "Invalid connection payload", parsed.error.flatten());
+  const proj = await getProjectByRef(parsed.data.project_ref);
+  if (!proj) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, proj.organizationId, PROJECT_UPDATE);
+  const auth = await currentUserGithubToken(session.user.id);
+  if (!auth) throw new AppError(400, "github_not_authorized", "GitHub is not connected");
+  const repo = await getRepoById(auth.token, parsed.data.repository_id);
+  if (!repo) throw new AppError(404, "repo_not_found", "Repository not found");
+  const branch = repo.default_branch;
+
+  const [row] = await db
+    .insert(githubConnection)
+    .values({
+      organizationId: proj.organizationId,
+      projectId: proj.id,
+      installationId: parsed.data.installation_id,
+      repositoryId: repo.id,
+      repositoryName: repo.full_name,
+      branch,
+      workdir: parsed.data.workdir ?? ".",
+      newBranchPerPr: parsed.data.new_branch_per_pr ?? true,
+      supabaseChangesOnly: parsed.data.supabase_changes_only ?? true,
+      branchLimit: parsed.data.branch_limit ?? 3,
+      createdBy: session.user.id,
+    })
+    .onConflictDoUpdate({
+      target: githubConnection.projectId,
+      set: { installationId: parsed.data.installation_id, repositoryId: repo.id, repositoryName: repo.full_name, branch, updatedAt: new Date() },
+    })
+    .returning();
+
+  // Mirror into the deploy pipeline's stores so push/PR/merge/deploy work.
+  await db
+    .insert(orgGithubConnection)
+    .values({
+      organizationId: proj.organizationId,
+      githubLogin: auth.login,
+      accessTokenEncrypted: encrypt(auth.token),
+      installationId: String(parsed.data.installation_id),
+    })
+    .onConflictDoUpdate({
+      target: orgGithubConnection.organizationId,
+      set: { githubLogin: auth.login, accessTokenEncrypted: encrypt(auth.token), installationId: String(parsed.data.installation_id) },
+    });
+  await db.delete(projectRepoConnection).where(eq(projectRepoConnection.projectId, proj.id));
+  await db.insert(projectRepoConnection).values({ projectId: proj.id, repoFullName: repo.full_name, branch });
+
+  return c.json(
+    {
+      id: row!.id,
+      inserted_at: row!.createdAt.toISOString(),
+      updated_at: row!.updatedAt.toISOString(),
+      installation_id: row!.installationId,
+      branch_limit: row!.branchLimit,
+      new_branch_per_pr: row!.newBranchPerPr,
+      supabase_changes_only: row!.supabaseChangesOnly,
+      workdir: row!.workdir,
+    },
+    201
+  );
+});
+
+integrations.patch("/api/v1/integrations/github/connections/:id", async (c) => {
+  await requireSession(c);
+  const id = c.req.param("id");
+  const [row] = await db.select().from(githubConnection).where(eq(githubConnection.id, id));
+  if (!row) throw new AppError(404, "not_found", "Connection not found");
+  await requirePermission(c, row.organizationId, PROJECT_UPDATE);
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  if (typeof body.workdir === "string") patch.workdir = body.workdir;
+  if (typeof body.new_branch_per_pr === "boolean") patch.newBranchPerPr = body.new_branch_per_pr;
+  if (typeof body.supabase_changes_only === "boolean") patch.supabaseChangesOnly = body.supabase_changes_only;
+  if (typeof body.branch_limit === "number") patch.branchLimit = body.branch_limit;
+  await db.update(githubConnection).set(patch).where(eq(githubConnection.id, id));
+  return c.body(null, 204);
+});
+
+integrations.delete("/api/v1/integrations/github/connections/:id", async (c) => {
+  await requireSession(c);
+  const id = c.req.param("id");
+  const [row] = await db.select().from(githubConnection).where(eq(githubConnection.id, id));
+  if (!row) throw new AppError(404, "not_found", "Connection not found");
+  await requirePermission(c, row.organizationId, PROJECT_UPDATE);
+  await db.delete(githubConnection).where(eq(githubConnection.id, id));
+  await db.delete(projectRepoConnection).where(eq(projectRepoConnection.projectId, row.projectId));
+  return c.body(null, 204);
 });

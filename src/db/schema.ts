@@ -86,6 +86,38 @@ export const orgGithubConnection = pgTable("org_github_connection", {
   installationId: text("installation_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+// A user's GitHub App OAuth authorization (the user-access token + identity). One
+// row per user; powers the dashboard's "Connect GitHub" state + repo listing.
+export const githubAuthorization = pgTable("github_authorization", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: text("user_id").notNull().unique().references(() => user.id, { onDelete: "cascade" }),
+  githubUserId: integer("github_user_id").notNull(),
+  githubLogin: text("github_login").notNull(),
+  accessTokenEncrypted: text("access_token_encrypted").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// A GitHub repo <-> project connection created via the dashboard integration UI.
+// Mirrors what Supabase's platform stores; kept in sync with project_repo_connection
+// (repoFullName + branch) so the deploy / webhook / branch-sync pipeline can use it.
+export const githubConnection = pgTable("github_connection", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => project.id, { onDelete: "cascade" }),
+  installationId: integer("installation_id").notNull(),
+  repositoryId: integer("repository_id").notNull(),
+  repositoryName: text("repository_name").notNull(), // full name: owner/repo
+  branch: text("branch").notNull().default("main"),
+  workdir: text("workdir").notNull().default("."),
+  newBranchPerPr: boolean("new_branch_per_pr").notNull().default(true),
+  supabaseChangesOnly: boolean("supabase_changes_only").notNull().default(true),
+  branchLimit: integer("branch_limit").notNull().default(3),
+  createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [unique("github_connection_project_uniq").on(t.projectId)]);
+
 export const orgVercelConnection = pgTable("org_vercel_connection", {
   id: uuid("id").defaultRandom().primaryKey(),
   organizationId: text("organization_id").notNull().unique().references(() => organization.id, { onDelete: "cascade" }),
@@ -141,6 +173,8 @@ export type OrgAwsCredentials = typeof orgAwsCredentials.$inferSelect;
 export type ProjectSecrets = typeof projectSecrets.$inferSelect;
 export type OrgOauthApp = typeof orgOauthApp.$inferSelect;
 export type OrgGithubConnection = typeof orgGithubConnection.$inferSelect;
+export type GithubAuthorization = typeof githubAuthorization.$inferSelect;
+export type GithubConnection = typeof githubConnection.$inferSelect;
 export type OrgVercelConnection = typeof orgVercelConnection.$inferSelect;
 export type ProjectRepoConnection = typeof projectRepoConnection.$inferSelect;
 export type ProjectPrivatelinkAccount = typeof projectPrivatelinkAccount.$inferSelect;

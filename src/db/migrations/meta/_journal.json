@@ -113,6 +113,13 @@
       "when": 1780852734108,
       "tag": "0015_preview_branches",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1780860140854,
+      "tag": "0016_github_oauth_integration",
+      "breakpoints": true
     }
   ]
 }
