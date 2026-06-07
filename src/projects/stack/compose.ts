@@ -31,6 +31,9 @@ export function buildStack(input: BuildStackInput): { composeYaml: string; env: 
     KONG_HTTP_PORT: String(input.ports.kongHttp),
     KONG_HTTPS_PORT: String(input.ports.kongHttps),
     POSTGRES_PORT: String(input.ports.db),
+    // Per-project Supavisor transaction pooler host port (reserved as db+1) so
+    // multiple projects don't all collide on the hardcoded 6543.
+    POOLER_PROXY_PORT_TRANSACTION: String(input.ports.db + 1),
     API_EXTERNAL_URL: input.urls.apiExternalUrl,
     SITE_URL: input.urls.siteUrl,
     SUPABASE_PUBLIC_URL: input.urls.supabasePublicUrl,

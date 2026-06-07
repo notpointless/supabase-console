@@ -21,7 +21,10 @@ export async function allocatePorts(projectId: string): Promise<Ports> {
       .from(project);
     const rawMax = rows[0]?.max ?? null;
     const maxDb = rawMax != null ? Number(rawMax) : null;
-    const start = maxDb != null ? maxDb + 1 : base;
+    // Stride of 4: kong-http, kong-https, db, and (db+1) reserved for the Supavisor
+    // transaction pooler — so each project's pooler port is unique instead of all
+    // binding the hardcoded 6543. The next project starts at maxDb+2.
+    const start = maxDb != null ? maxDb + 2 : base;
     const ports: Ports = {
       kongHttpPort: start,
       kongHttpsPort: start + 1,
