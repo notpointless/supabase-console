@@ -16,7 +16,9 @@ export const auth = betterAuth({
   appName: "Supabase Console",
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
-  trustedOrigins: [env.BETTER_AUTH_URL],
+  // Trust the dashboard origin (APP_URL) too: the forked Studio proxies
+  // /api/auth/* from its own origin, so requests carry that Origin header.
+  trustedOrigins: [env.BETTER_AUTH_URL, ...(env.APP_URL ? [env.APP_URL] : [])],
   // `transaction: true` lets better-auth wrap multi-step writes (e.g. the
   // install setup createUser + linkAccount + marker) in a real DB transaction.
   database: drizzleAdapter(db, { provider: "pg", transaction: true }),
