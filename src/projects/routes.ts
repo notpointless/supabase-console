@@ -26,6 +26,7 @@ import { eq, and } from "drizzle-orm";
 import { getProvisionerFor } from "./provisioner";
 import { listBackups, createBackup, backupFilePath, restoreBackup } from "./backups";
 import { listFunctionSecrets, setFunctionSecrets, deleteFunctionSecrets } from "./function-secrets";
+import { getRealtimeConfig, updateRealtimeConfig } from "./realtime-config";
 import { readFileSync } from "node:fs";
 import { listBranches, createBranch, getBranchById, deleteBranch, resetBranch, mapBranch, branchSchemaDiff } from "./branches";
 import { mergeBranchToProduction } from "../integrations/github-deploy";
@@ -169,6 +170,32 @@ projects.post("/api/v1/projects/:ref/restart-services", async (c) => {
   const services = body.restartRequest?.services ?? body.services ?? [];
   await restartProject(ref, services);
   return c.json(publicProject(row));
+});
+
+// Realtime configuration (reads/writes the project's _realtime.tenants row; applies live).
+projects.get("/api/v1/projects/:ref/config/realtime", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  try {
+    return c.json(await getRealtimeConfig(row));
+  } catch (e) {
+    throw new AppError(502, "realtime_config_error", e instanceof Error ? e.message : "Failed to read realtime config");
+  }
+});
+
+projects.patch("/api/v1/projects/:ref/config/realtime", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  try {
+    return c.json(await updateRealtimeConfig(row, body));
+  } catch (e) {
+    throw new AppError(502, "realtime_config_error", e instanceof Error ? e.message : "Failed to update realtime config");
+  }
 });
 
 // Enable/disable the REST Data API for a project (toggle public schema exposure).
