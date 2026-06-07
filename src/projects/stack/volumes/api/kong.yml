@@ -263,7 +263,49 @@ services:
         paths:
           - /storage/v1/
     plugins:
+      # [console fork] Explicit CORS so the browser's resumable (tus) upload preflight
+      # passes — the default header set omits the Tus-* / Upload-* headers, and the
+      # browser needs Location + Upload-Offset exposed to continue the upload.
       - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - GET
+            - HEAD
+            - PUT
+            - PATCH
+            - POST
+            - DELETE
+            - OPTIONS
+          headers:
+            - Accept
+            - Authorization
+            - Content-Type
+            - Content-Length
+            - apikey
+            - x-client-info
+            - x-upsert
+            - cache-control
+            - x-requested-with
+            - Tus-Resumable
+            - Upload-Length
+            - Upload-Metadata
+            - Upload-Offset
+            - Upload-Concat
+            - Upload-Defer-Length
+            - X-HTTP-Method-Override
+          exposed_headers:
+            - Location
+            - Tus-Resumable
+            - Tus-Version
+            - Tus-Extension
+            - Tus-Max-Size
+            - Upload-Offset
+            - Upload-Length
+            - Upload-Metadata
+          credentials: true
+          max_age: 3600
       - name: request-transformer
         config:
           add:
