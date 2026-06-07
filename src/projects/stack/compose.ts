@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse, stringify } from "yaml";
 import type { ProjectSecretValues } from "../secrets";
+import { derivePublishableKey, deriveSecretKey } from "../secrets";
 import { STACK_ENV_DEFAULTS } from "./env-defaults";
 
 export interface BuildStackInput {
@@ -24,6 +25,14 @@ export function buildStack(input: BuildStackInput): { composeYaml: string; env: 
     JWT_SECRET: input.secrets.jwtSecret,
     ANON_KEY: input.secrets.anonKey,
     SERVICE_ROLE_KEY: input.secrets.serviceRoleKey,
+    // New-format API keys; kong accepts these as anon/service_role keyauth creds.
+    SUPABASE_PUBLISHABLE_KEY: derivePublishableKey(input.secrets.jwtSecret),
+    SUPABASE_SECRET_KEY: deriveSecretKey(input.secrets.jwtSecret),
+    // Kong's request-transformer swaps an incoming sb_ opaque key for these JWTs.
+    // We use the working HS256 anon/service_role JWTs so every project service
+    // (rest, storage, realtime, functions…) validates them, not just PostgREST.
+    ANON_KEY_ASYMMETRIC: input.secrets.anonKey,
+    SERVICE_ROLE_KEY_ASYMMETRIC: input.secrets.serviceRoleKey,
     SECRET_KEY_BASE: input.secrets.secretKeyBase,
     DASHBOARD_PASSWORD: input.secrets.dashboardPassword,
     VAULT_ENC_KEY: input.secrets.vaultEncKey,

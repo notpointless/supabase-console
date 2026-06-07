@@ -17,7 +17,7 @@ import {
   resumeProject,
   deleteProject,
 } from "./service";
-import { getProjectSecrets } from "./secrets";
+import { getProjectSecrets, derivePublishableKey, deriveSecretKey } from "./secrets";
 import type { Project } from "../db/schema";
 import { project, organization, member } from "../db/schema";
 import { db } from "../db/client";
@@ -262,5 +262,35 @@ projects.get("/api/v1/projects/:ref/api-keys", async (c) => {
   await requirePermission(c, row.organizationId, { project: ["content"] });
   const secrets = await getProjectSecrets(row.id);
   if (!secrets) throw new AppError(404, "project_secrets_not_found", "Project secrets not found");
-  return c.json({ anonKey: secrets.anonKey, serviceRoleKey: secrets.serviceRoleKey });
+  return c.json({
+    anonKey: secrets.anonKey,
+    serviceRoleKey: secrets.serviceRoleKey,
+    publishableKey: derivePublishableKey(secrets.jwtSecret),
+    secretKey: deriveSecretKey(secrets.jwtSecret),
+  });
+});
+
+// Create the default new-format API keys. The keys are derived from the JWT secret,
+// so this just ensures the running stack exposes them (kong keyauth) by re-applying
+// its config, then returns them. Idempotent.
+projects.post("/api/v1/projects/:ref/api-keys", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const secrets = await getProjectSecrets(row.id);
+  if (!secrets) throw new AppError(404, "project_secrets_not_found", "Project secrets not found");
+  // Re-apply so an already-running project's kong picks up the keys (best-effort).
+  try {
+    await getProvisionerFor(row).reconfigure?.(row);
+  } catch {
+    /* keys are still returned; reconfigure is best-effort */
+  }
+  return c.json({
+    anonKey: secrets.anonKey,
+    serviceRoleKey: secrets.serviceRoleKey,
+    publishableKey: derivePublishableKey(secrets.jwtSecret),
+    secretKey: deriveSecretKey(secrets.jwtSecret),
+  });
 });

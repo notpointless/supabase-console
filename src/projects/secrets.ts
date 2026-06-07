@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHmac } from "node:crypto";
 import { SignJWT } from "jose";
 import { eq } from "drizzle-orm";
 import { db } from "../db/client";
@@ -28,6 +28,20 @@ export async function signSupabaseKey(
     .setIssuedAt(iat)
     .setExpirationTime(iat + TEN_YEARS_SECONDS)
     .sign(secret);
+}
+
+// [console fork] New-format API keys (sb_publishable_* / sb_secret_*). Derived
+// deterministically from the project's JWT secret so they need no extra storage and
+// are reproducible in buildStack (kong accepts them via SUPABASE_PUBLISHABLE_KEY /
+// SUPABASE_SECRET_KEY keyauth credentials). Rotating the JWT secret rotates these.
+export function derivePublishableKey(jwtSecret: string): string {
+  const sig = createHmac("sha256", jwtSecret).update("sb_publishable_v1").digest("hex").slice(0, 40);
+  return `sb_publishable_${sig}`;
+}
+
+export function deriveSecretKey(jwtSecret: string): string {
+  const sig = createHmac("sha256", jwtSecret).update("sb_secret_v1").digest("hex").slice(0, 40);
+  return `sb_secret_${sig}`;
 }
 
 export async function generateProjectSecrets(): Promise<ProjectSecretValues> {
