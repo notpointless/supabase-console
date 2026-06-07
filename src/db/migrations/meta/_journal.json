@@ -99,6 +99,13 @@
       "when": 1780790959310,
       "tag": "0013_dry_boom_boom",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1780791779007,
+      "tag": "0014_goofy_magma",
+      "breakpoints": true
     }
   ]
 }

@@ -27,7 +27,6 @@ export const user = pgTable("user", {
   twoFactorEnabled: boolean("two_factor_enabled").default(false),
   firstName: text("first_name"),
   lastName: text("last_name"),
-  displayName: text("display_name"),
   username: text("username"),
 });
 

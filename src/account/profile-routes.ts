@@ -2,7 +2,7 @@
  * Account profile routes — /api/v1/account/profile and /api/v1/account/delete.
  *
  * GET  /api/v1/account/profile   → public profile (no password/hash fields)
- * PUT  /api/v1/account/profile   → update firstName/lastName/displayName/username
+ * PUT  /api/v1/account/profile   → update firstName/lastName/username
  * POST /api/v1/account/delete    → delete own account; blocked for platform admins
  *                                   and for users who still own projects.
  */
@@ -25,7 +25,6 @@ function toPublicProfile(row: typeof user.$inferSelect) {
     name: row.name,
     firstName: row.firstName,
     lastName: row.lastName,
-    displayName: row.displayName,
     username: row.username,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -52,7 +51,6 @@ accountProfile.get("/api/v1/account/profile", async (c) => {
 const updateSchema = z.object({
   firstName: z.string().optional(),
   lastName: z.string().optional(),
-  displayName: z.string().optional(),
   username: z.string().optional(),
 });
 
@@ -66,11 +64,11 @@ accountProfile.put("/api/v1/account/profile", async (c) => {
     throw new AppError(400, "validation_error", "Invalid payload", parsed.error.flatten());
   }
 
-  const { firstName, lastName, displayName, username } = parsed.data;
+  const { firstName, lastName, username } = parsed.data;
 
   await db
     .update(user)
-    .set({ firstName, lastName, displayName, username })
+    .set({ firstName, lastName, username })
     .where(eq(user.id, userId));
 
   const [updated] = await db.select().from(user).where(eq(user.id, userId)).limit(1);

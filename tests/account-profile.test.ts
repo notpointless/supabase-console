@@ -116,7 +116,6 @@ describe("account profile", () => {
       body: JSON.stringify({
         firstName: "Z",
         lastName: "V",
-        displayName: "zee",
         username: "zeljko",
       }),
     });
@@ -125,7 +124,6 @@ describe("account profile", () => {
     const putBody = (await putRes.json()) as Record<string, unknown>;
     expect(putBody.firstName).toBe("Z");
     expect(putBody.lastName).toBe("V");
-    expect(putBody.displayName).toBe("zee");
     expect(putBody.username).toBe("zeljko");
 
     // PUT response must not contain password/hash.
@@ -139,7 +137,6 @@ describe("account profile", () => {
     const getBody = (await getRes.json()) as Record<string, unknown>;
     expect(getBody.firstName).toBe("Z");
     expect(getBody.lastName).toBe("V");
-    expect(getBody.displayName).toBe("zee");
     expect(getBody.username).toBe("zeljko");
 
     // GET response must not contain password/hash.
