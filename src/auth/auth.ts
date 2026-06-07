@@ -22,7 +22,12 @@ export const auth = betterAuth({
   // `transaction: true` lets better-auth wrap multi-step writes (e.g. the
   // install setup createUser + linkAccount + marker) in a real DB transaction.
   database: drizzleAdapter(db, { provider: "pg", transaction: true }),
-  emailAndPassword: { enabled: true },
+  emailAndPassword: {
+    enabled: true,
+    // [console fork] Self-host policy: no public self-serve sign-up. Admins are
+    // created during install / via invite, never through an open sign-up endpoint.
+    disableSignUp: true,
+  },
   user: {
     additionalFields: {
       firstName: { type: "string", input: true, required: false },
