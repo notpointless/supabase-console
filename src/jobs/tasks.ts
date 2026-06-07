@@ -24,8 +24,9 @@ export const taskList = {
       // [console fork] A failed provision must NOT leave a project behind. Roll back
       // fully: best-effort tear down any AWS/stack resources, then delete the row.
       // (The reason is logged here since the record is gone.)
+      const reason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
       // eslint-disable-next-line no-console
-      console.error(`[provision] ${ref} failed — rolling back:`, e instanceof Error ? e.message : e);
+      console.error(`[provision] ${ref} failed — rolling back:`, reason);
       try {
         const current = await loadByRef(ref);
         if (current) await getProvisionerFor(current).delete(current);

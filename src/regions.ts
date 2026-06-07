@@ -14,8 +14,14 @@ export const EC2_REGIONS: Region[] = [
   { id: "ap-northeast-1", label: "Northeast Asia (Tokyo)" },
 ];
 
+// The dashboard offers the full AWS region catalog (shared-data); EC2_REGIONS above
+// is just the curated/labelled subset. The provisioner is region-agnostic (dynamic AMI
+// lookup + default-VPC auto-create per region), so accept ANY valid AWS region code —
+// not only the labelled ones — so every region the UI shows actually provisions.
+const AWS_REGION_RE = /^[a-z]{2}-[a-z]+-\d+$/;
+
 export function isEc2Region(id: string): boolean {
-  return EC2_REGIONS.some((r) => r.id === id);
+  return id !== SHARED_REGION.id && AWS_REGION_RE.test(id);
 }
 
 export function isKnownRegion(id: string): boolean {
