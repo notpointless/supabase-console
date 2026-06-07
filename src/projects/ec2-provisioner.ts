@@ -148,6 +148,7 @@ export class Ec2Provisioner implements Provisioner {
         siteUrl: "http://__PUBLIC_HOST__:8000",
         supabasePublicUrl: "http://__PUBLIC_HOST__:8000",
       },
+      dataApiEnabled: project.dataApiEnabled,
     });
 
     const [imageId, groupId] = await Promise.all([latestAl2023Ami(ec2), ensureSecurityGroup(ec2)]);

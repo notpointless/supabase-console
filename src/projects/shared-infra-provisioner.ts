@@ -25,6 +25,7 @@ export class SharedInfraProvisioner implements Provisioner {
       dbPassword: decrypt(project.dbPasswordEncrypted),
       ports: { kongHttp: ports.kongHttpPort, kongHttps: ports.kongHttpsPort, db: ports.dbPort },
       urls: { apiExternalUrl: apiUrl, siteUrl: apiUrl, supabasePublicUrl: apiUrl },
+      dataApiEnabled: project.dataApiEnabled,
     });
     const dir = writeStack(project.ref, { composeYaml, env });
     await getComposeRunner().up(dir, name(project.ref));

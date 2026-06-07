@@ -11,6 +11,8 @@ export interface BuildStackInput {
   dbPassword: string;
   ports: { kongHttp: number; kongHttps: number; db: number };
   urls: { apiExternalUrl: string; siteUrl: string; supabasePublicUrl: string };
+  // When false, the REST Data API does not expose the user's `public` schema.
+  dataApiEnabled?: boolean;
 }
 
 const BASE_PATH = join(dirname(fileURLToPath(import.meta.url)), "compose.base.yml");
@@ -33,6 +35,11 @@ export function buildStack(input: BuildStackInput): { composeYaml: string; env: 
     SITE_URL: input.urls.siteUrl,
     SUPABASE_PUBLIC_URL: input.urls.supabasePublicUrl,
   };
+
+  // Data API disabled: don't expose the user's `public` schema over REST.
+  if (input.dataApiEnabled === false) {
+    env.PGRST_DB_SCHEMAS = "graphql_public";
+  }
 
   const doc = parse(readFileSync(BASE_PATH, "utf8")) as {
     name?: string;
