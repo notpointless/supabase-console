@@ -252,29 +252,59 @@ export class Ec2Provisioner implements Provisioner {
     const instanceId = run.Instances?.[0]?.InstanceId;
     if (!instanceId) throw new Error("EC2 did not return an instance id");
 
-    const host = await this.waitForPublicHost(ec2, instanceId);
-    const apiUrl = `http://${host}:8000`;
-    return {
-      connection: {
-        host,
-        apiUrl,
-        kongHttpPort: 8000,
-        kongHttpsPort: 8443,
-        dbPort: 5432,
-        ref: project.ref,
-        // persisted in project.connection (jsonb) for lifecycle ops
-        instanceId,
-        region: project.region,
-      } as Connection & { instanceId: string; region: string },
-    };
+    // Self-clean on any post-launch failure: the connection (with instanceId) isn't
+    // persisted until we return, so the provision-task rollback can't see the instance
+    // to terminate it. Terminate here so a failed provision never leaves an orphan.
+    try {
+      const host = await this.waitForPublicHost(ec2, instanceId);
+      const apiUrl = `http://${host}:8000`;
+      return {
+        connection: {
+          host,
+          apiUrl,
+          kongHttpPort: 8000,
+          kongHttpsPort: 8443,
+          dbPort: 5432,
+          ref: project.ref,
+          // persisted in project.connection (jsonb) for lifecycle ops
+          instanceId,
+          region: project.region,
+        } as Connection & { instanceId: string; region: string },
+      };
+    } catch (e) {
+      await this.terminateWithRetry(ec2, instanceId).catch(() => {});
+      throw e;
+    }
+  }
+
+  // Terminate an instance, tolerating eventual consistency right after launch.
+  private async terminateWithRetry(ec2: EC2Client, instanceId: string): Promise<void> {
+    for (let i = 0; i < 18; i++) {
+      try {
+        await ec2.send(new TerminateInstancesCommand({ InstanceIds: [instanceId] }));
+        return;
+      } catch (e) {
+        if ((e as { name?: string })?.name === "InvalidInstanceID.NotFound" && i < 17) {
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+        throw e;
+      }
+    }
   }
 
   private async waitForPublicHost(ec2: EC2Client, instanceId: string): Promise<string> {
     for (let i = 0; i < 60; i++) {
-      const out = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
-      const inst = out.Reservations?.[0]?.Instances?.[0];
-      const host = inst?.PublicDnsName || inst?.PublicIpAddress;
-      if (host && inst?.State?.Name === "running") return host;
+      try {
+        const out = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
+        const inst = out.Reservations?.[0]?.Instances?.[0];
+        const host = inst?.PublicDnsName || inst?.PublicIpAddress;
+        if (host && inst?.State?.Name === "running") return host;
+      } catch (e) {
+        // AWS eventual consistency: a just-launched instance ID isn't queryable for a
+        // few seconds. Tolerate NotFound and keep polling instead of failing provision.
+        if ((e as { name?: string })?.name !== "InvalidInstanceID.NotFound") throw e;
+      }
       await new Promise((r) => setTimeout(r, 5000));
     }
     throw new Error(`EC2 instance ${instanceId} did not become reachable in time`);
@@ -338,6 +368,6 @@ export class Ec2Provisioner implements Provisioner {
   async delete(project: Project): Promise<void> {
     const creds = await getCredentials(project.organizationId);
     const ec2 = clientFor(project.region, creds);
-    await ec2.send(new TerminateInstancesCommand({ InstanceIds: [instanceIdOf(project)] }));
+    await this.terminateWithRetry(ec2, instanceIdOf(project));
   }
 }
