@@ -11,6 +11,8 @@ import { orgOauthApps } from "./auth/oauth-app-routes";
 import { orgSecurity } from "./org/security-routes";
 import { integrations } from "./integrations/routes";
 import { usage } from "./usage/routes";
+import { auditMiddleware } from "./audit/middleware";
+import { auditRoutes } from "./audit/routes";
 
 export const app = new Hono();
 
@@ -39,7 +41,11 @@ app.on(["POST", "GET"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
 // Everything under /api/v1 is gated until install completes.
 app.use("/api/v1/*", installGate);
+// Record all /api/v1 mutations (POST/PUT/PATCH/DELETE) for the audit trail.
+// Best-effort: errors are swallowed inside the middleware; requests are never broken.
+app.use("/api/v1/*", auditMiddleware);
 app.route("/", me);
+app.route("/", auditRoutes);
 app.route("/", accessTokens);
 app.route("/", usage);
 app.route("/", orgOauthApps);

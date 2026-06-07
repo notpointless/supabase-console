@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, boolean, jsonb, timestamp, integer, unique } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, boolean, jsonb, timestamp, integer, unique, index } from "drizzle-orm/pg-core";
 import { organization, user } from "./auth-schema";
 
 // All better-auth tables are generated into auth-schema.ts.
@@ -115,6 +115,21 @@ export const projectPrivatelinkAccount = pgTable(
   },
   (t) => [unique("project_privatelink_account_project_id_aws_account_id_uniq").on(t.projectId, t.awsAccountId)],
 );
+
+// ---------------------------------------------------------------------------
+// Audit log: records every /api/v1 mutation (POST/PUT/PATCH/DELETE).
+// Recording is best-effort — errors are swallowed in middleware.
+// ---------------------------------------------------------------------------
+export const auditLog = pgTable("audit_log", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "set null" }),
+  organizationId: text("organization_id").references(() => organization.id, { onDelete: "cascade" }),
+  method: text("method").notNull(),
+  path: text("path").notNull(),
+  statusCode: integer("status_code").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("audit_log_org_idx").on(t.organizationId), index("audit_log_actor_idx").on(t.actorUserId)]);
+export type AuditLog = typeof auditLog.$inferSelect;
 
 export type Project = typeof project.$inferSelect;
 export type OrgAwsCredentials = typeof orgAwsCredentials.$inferSelect;
