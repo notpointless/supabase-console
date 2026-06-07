@@ -106,6 +106,16 @@ export const taskList = {
     const { seedBranchFromParent } = await import("../projects/branches.js");
     await seedBranchFromParent(row, !!withData);
   },
+  // [console fork] Apply a project's connected GitHub repo migrations (push webhook).
+  github_deploy: async (payload: unknown): Promise<void> => {
+    const { ref } = payload as { ref: string };
+    const { deployProject } = await import("../integrations/github-deploy.js");
+    try {
+      await deployProject(ref);
+    } catch {
+      // best-effort; surfaced via manual deploy if it fails here
+    }
+  },
   // [console fork] Daily logical backup of every active shared-infra project
   // (scheduled via the worker crontab). Best-effort per project.
   backup_all: async (): Promise<void> => {

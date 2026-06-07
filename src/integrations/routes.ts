@@ -3,6 +3,7 @@ import { z } from "zod";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/client";
 import {
+  project,
   orgGithubConnection,
   orgVercelConnection,
   projectRepoConnection,
@@ -12,6 +13,14 @@ import { requireSession, requirePermission } from "../http/guards";
 import { AppError } from "../http/error";
 import { encrypt } from "../crypto/secrets";
 import { getProjectByRef } from "../projects/service";
+import { getQueue } from "../jobs/queue";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import {
+  deployProject,
+  getRepoConnection,
+  setRepoConnection,
+  deleteRepoConnection,
+} from "./github-deploy";
 
 export const integrations = new Hono();
 
@@ -358,4 +367,96 @@ integrations.delete("/api/v1/projects/:ref/privatelink/accounts/:id", async (c) 
     .where(eq(projectPrivatelinkAccount.id, id));
 
   return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// GitHub deploy pipeline: connect a repo+branch to a project and apply its
+// `supabase/migrations/*.sql` to the project DB (manually or via push webhook).
+// ---------------------------------------------------------------------------
+const repoConnSchema = z.object({
+  repository: z.string().min(3), // owner/repo
+  branch: z.string().min(1).default("main"),
+});
+
+integrations.get("/api/v1/projects/:ref/github/connection", async (c) => {
+  await requireSession(c);
+  const proj = await getProjectByRef(c.req.param("ref"));
+  if (!proj) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, proj.organizationId, MEMBER);
+  const conn = await getRepoConnection(proj.id);
+  return c.json(conn ? { connected: true, repository: conn.repoFullName, branch: conn.branch } : { connected: false });
+});
+
+integrations.put("/api/v1/projects/:ref/github/connection", async (c) => {
+  await requireSession(c);
+  const proj = await getProjectByRef(c.req.param("ref"));
+  if (!proj) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, proj.organizationId, PROJECT_UPDATE);
+  const parsed = repoConnSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) throw new AppError(400, "validation_error", "Invalid connection payload", parsed.error.flatten());
+  const conn = await setRepoConnection(proj, parsed.data.repository, parsed.data.branch);
+  return c.json({ connected: true, repository: conn.repoFullName, branch: conn.branch });
+});
+
+integrations.delete("/api/v1/projects/:ref/github/connection", async (c) => {
+  await requireSession(c);
+  const proj = await getProjectByRef(c.req.param("ref"));
+  if (!proj) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, proj.organizationId, PROJECT_UPDATE);
+  await deleteRepoConnection(proj.id);
+  return c.json({ connected: false });
+});
+
+// Apply the connected repo's migrations now.
+integrations.post("/api/v1/projects/:ref/github/deploy", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const proj = await getProjectByRef(ref);
+  if (!proj) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, proj.organizationId, PROJECT_UPDATE);
+  const result = await deployProject(ref);
+  return c.json(result);
+});
+
+// GitHub push webhook. Verifies the HMAC signature against GITHUB_WEBHOOK_SECRET,
+// then enqueues a deploy for every project connected to the pushed repo+branch.
+// (Reachable only when the backend is exposed publicly; no-ops gracefully otherwise.)
+integrations.post("/api/v1/github/webhook", async (c) => {
+  const secret = process.env.GITHUB_WEBHOOK_SECRET;
+  const raw = await c.req.text();
+  if (secret) {
+    const sig = c.req.header("x-hub-signature-256") ?? "";
+    const expected = "sha256=" + createHmac("sha256", secret).update(raw).digest("hex");
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      throw new AppError(401, "invalid_signature", "Invalid webhook signature");
+    }
+  }
+  if (c.req.header("x-github-event") !== "push") return c.json({ ok: true, ignored: true });
+  let payload: any;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    throw new AppError(400, "invalid_payload", "Invalid JSON");
+  }
+  const repoFullName: string | undefined = payload?.repository?.full_name;
+  const pushedBranch: string | undefined = (payload?.ref ?? "").replace("refs/heads/", "");
+  if (!repoFullName || !pushedBranch) return c.json({ ok: true, ignored: true });
+
+  const conns = await db
+    .select({ projectId: projectRepoConnection.projectId, branch: projectRepoConnection.branch })
+    .from(projectRepoConnection)
+    .where(eq(projectRepoConnection.repoFullName, repoFullName));
+  const targetIds = conns.filter((x) => (x.branch ?? "main") === pushedBranch).map((x) => x.projectId);
+
+  let deploying = 0;
+  for (const pid of targetIds) {
+    const [proj] = await db.select().from(project).where(eq(project.id, pid));
+    if (proj) {
+      await getQueue().enqueue("github_deploy", { ref: proj.ref });
+      deploying++;
+    }
+  }
+  return c.json({ ok: true, deploying });
 });
