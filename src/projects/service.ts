@@ -83,19 +83,3 @@ export async function deleteProject(ref: string): Promise<void> {
   await getQueue().enqueue("delete", { ref });
 }
 
-// Synchronously tear down every project in an org and remove its rows. Used when
-// an organization is deleted so no EC2 instance or shared-infra stack is orphaned
-// and no project row is left dangling against the about-to-be-deleted org.
-export async function deleteAllProjectsForOrg(organizationId: string): Promise<void> {
-  const { getProvisionerFor } = await import("./provisioner.js");
-  const rows = await db.select().from(project).where(eq(project.organizationId, organizationId));
-  for (const p of rows) {
-    try {
-      await getProvisionerFor(p).delete(p);
-    } catch {
-      // best-effort teardown; still remove the rows so the org can be deleted.
-    }
-    await db.delete(projectSecrets).where(eq(projectSecrets.projectId, p.id));
-    await db.delete(project).where(eq(project.id, p.id));
-  }
-}

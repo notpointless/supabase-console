@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin, organization, twoFactor, oidcProvider } from "better-auth/plugins";
+import { APIError } from "better-auth/api";
 import { sso } from "@better-auth/sso";
 import { apiKey } from "@better-auth/api-key";
 import { db } from "../db/client";
@@ -75,12 +76,19 @@ export const auth = betterAuth({
           assertValidOrgFields(organization as { type?: unknown; dataPrivacyLevel?: unknown });
           return { data: organization };
         },
-        // Cascade: tearing down an org tears down ALL its projects' infrastructure
-        // (EC2 instances + shared-infra stacks) and removes their rows, so nothing
-        // is orphaned and the org row can be deleted without FK violations.
+        // Safety: refuse to delete an org that still has projects. The user must
+        // delete every project first (which tears down its EC2 / shared infra), so
+        // org deletion can never silently destroy running databases.
         beforeDeleteOrganization: async ({ organization }: { organization: { id: string } }) => {
-          const { deleteAllProjectsForOrg } = await import("../projects/service.js");
-          await deleteAllProjectsForOrg(organization.id);
+          const { listProjects } = await import("../projects/service.js");
+          const projects = await listProjects(organization.id);
+          if (projects.length > 0) {
+            throw new APIError("BAD_REQUEST", {
+              message: `This organization still has ${projects.length} project${
+                projects.length === 1 ? "" : "s"
+              }. Delete all projects before deleting the organization.`,
+            });
+          }
         },
       },
       sendInvitationEmail: async (data) => {
