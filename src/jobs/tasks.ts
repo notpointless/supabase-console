@@ -71,6 +71,41 @@ export const taskList = {
         .where(eq(project.ref, ref));
     }
   },
+  // [console fork] Provision a preview branch: bring up its isolated stack, then
+  // seed its database (schema, +data if requested) from the parent project.
+  provision_branch: async (payload: unknown): Promise<void> => {
+    const { ref, withData } = payload as { ref: string; withData?: boolean };
+    const row = await loadByRef(ref);
+    if (!row) return;
+    if (row.status !== "provisioning") return;
+    const { seedBranchFromParent } = await import("../projects/branches.js");
+    try {
+      const result = await getProvisionerFor(row).provision(row);
+      // Stack is up; record connection before seeding so the branch is reachable.
+      await db
+        .update(project)
+        .set({ connection: result.connection, updatedAt: new Date() })
+        .where(eq(project.ref, ref));
+      await seedBranchFromParent({ ...row, connection: result.connection }, !!withData);
+      await db
+        .update(project)
+        .set({ status: "active", failureReason: null, updatedAt: new Date() })
+        .where(and(eq(project.ref, ref), eq(project.status, "provisioning")));
+    } catch (e) {
+      await db
+        .update(project)
+        .set({ status: "failed", failureReason: e instanceof Error ? e.message : "branch provision failed", updatedAt: new Date() })
+        .where(eq(project.ref, ref));
+    }
+  },
+  // [console fork] Re-seed an existing branch's database from its parent (branch reset).
+  seed_branch: async (payload: unknown): Promise<void> => {
+    const { ref, withData } = payload as { ref: string; withData?: boolean };
+    const row = await loadByRef(ref);
+    if (!row) return;
+    const { seedBranchFromParent } = await import("../projects/branches.js");
+    await seedBranchFromParent(row, !!withData);
+  },
   // [console fork] Daily logical backup of every active shared-infra project
   // (scheduled via the worker crontab). Best-effort per project.
   backup_all: async (): Promise<void> => {

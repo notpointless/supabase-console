@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { db } from "../db/client";
 import { project, projectSecrets, type Project } from "../db/schema";
 import { encrypt } from "../crypto/secrets";
@@ -67,7 +67,12 @@ export async function getProjectByRef(ref: string): Promise<Project | undefined>
 }
 
 export async function listProjects(organizationId: string): Promise<Project[]> {
-  return db.select().from(project).where(eq(project.organizationId, organizationId));
+  // Exclude preview branches — they're child projects surfaced via the branches
+  // API + branch selector, not as standalone projects in the org's project grid.
+  return db
+    .select()
+    .from(project)
+    .where(and(eq(project.organizationId, organizationId), isNull(project.parentProjectId)));
 }
 
 export async function pauseProject(ref: string): Promise<void> {

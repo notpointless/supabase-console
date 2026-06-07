@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, boolean, jsonb, timestamp, integer, unique, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, boolean, jsonb, timestamp, integer, unique, index, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { organization, user } from "./auth-schema";
 
 // All better-auth tables are generated into auth-schema.ts.
@@ -24,6 +24,11 @@ export const project = pgTable("project", {
   kongHttpsPort: integer("kong_https_port"),
   dbPort: integer("db_port"),
   failureReason: text("failure_reason"),
+  // Preview branches: a branch is a child project (own stack/secrets/ports) whose
+  // database is seeded from the parent. `parentProjectId` is null for normal
+  // (production / "main" branch) projects and set for preview branches.
+  parentProjectId: uuid("parent_project_id").references((): AnyPgColumn => project.id, { onDelete: "cascade" }),
+  gitBranch: text("git_branch"),
   createdBy: text("created_by")
     .notNull()
     .references(() => user.id),

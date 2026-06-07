@@ -24,6 +24,7 @@ import { db } from "../db/client";
 import { eq, and } from "drizzle-orm";
 import { getProvisionerFor } from "./provisioner";
 import { listBackups, createBackup } from "./backups";
+import { listBranches, createBranch, getBranchById, deleteBranch, resetBranch, mapBranch } from "./branches";
 import { readStandbyKeys, addStandbyKey, removeStandbyKey, setStandbyKeyStatus } from "./signing-keys-store";
 import { assertMfaCompliant } from "../auth/mfa";
 
@@ -300,6 +301,110 @@ projects.post("/api/v1/projects/:ref/backups", async (c) => {
   } catch (e) {
     throw new AppError(500, "backup_failed", e instanceof Error ? e.message : "Backup failed");
   }
+});
+
+// ---------------------------------------------------------------------------
+// Preview branches. A branch is a child project (own stack) seeded from the parent.
+// ---------------------------------------------------------------------------
+const createBranchSchema = z.object({
+  branch_name: z.string().min(1).max(63),
+  git_branch: z.string().optional().nullable(),
+  with_data: z.boolean().optional(),
+  // accepted for API compatibility, ignored on shared infra:
+  region: z.string().optional(),
+  desired_instance_size: z.string().optional(),
+  is_default: z.boolean().optional(),
+});
+
+projects.get("/api/v1/projects/:ref/branches", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  return c.json(await listBranches(ref));
+});
+
+projects.post("/api/v1/projects/:ref/branches", async (c) => {
+  const session = await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const parsed = createBranchSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) throw new AppError(400, "validation_error", "Invalid branch payload", parsed.error.flatten());
+  const branch = await createBranch({
+    parentRef: ref,
+    branchName: parsed.data.branch_name,
+    gitBranch: parsed.data.git_branch ?? null,
+    withData: parsed.data.with_data,
+    createdBy: session.user.id,
+  });
+  return c.json(mapBranch(branch, ref));
+});
+
+// Branch-scoped operations are keyed by the branch's project id.
+async function loadBranchForRequest(c: any) {
+  const id = c.req.param("id");
+  const branch = await getBranchById(id);
+  if (!branch) throw new AppError(404, "branch_not_found", "Branch not found");
+  return branch;
+}
+
+projects.get("/api/v1/branches/:id", async (c) => {
+  await requireSession(c);
+  const branch = await loadBranchForRequest(c);
+  await requirePermission(c, branch.organizationId, { project: ["content"] });
+  const parentRef = branch.parentProjectId ? (await getBranchById(branch.parentProjectId))?.ref ?? branch.ref : branch.ref;
+  return c.json(mapBranch(branch, parentRef, !branch.parentProjectId));
+});
+
+projects.patch("/api/v1/branches/:id", async (c) => {
+  await requireSession(c);
+  const branch = await loadBranchForRequest(c);
+  await requirePermission(c, branch.organizationId, { project: ["update"] });
+  const body = (await c.req.json().catch(() => ({}))) as { branch_name?: string; git_branch?: string | null };
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  if (typeof body.branch_name === "string") patch.name = body.branch_name;
+  if (body.git_branch !== undefined) patch.gitBranch = body.git_branch;
+  await db.update(project).set(patch).where(eq(project.id, branch.id));
+  const updated = (await getBranchById(branch.id))!;
+  const parentRef = updated.parentProjectId ? (await getBranchById(updated.parentProjectId))?.ref ?? updated.ref : updated.ref;
+  return c.json(mapBranch(updated, parentRef, !updated.parentProjectId));
+});
+
+projects.delete("/api/v1/branches/:id", async (c) => {
+  await requireSession(c);
+  const branch = await loadBranchForRequest(c);
+  await requirePermission(c, branch.organizationId, { project: ["update"] });
+  await deleteBranch(branch.id);
+  return c.json({ message: "ok" });
+});
+
+projects.post("/api/v1/branches/:id/reset", async (c) => {
+  await requireSession(c);
+  const branch = await loadBranchForRequest(c);
+  await requirePermission(c, branch.organizationId, { project: ["update"] });
+  const body = (await c.req.json().catch(() => ({}))) as { with_data?: boolean };
+  await resetBranch(branch.id, !!body.with_data);
+  return c.json(mapBranch(branch, branch.ref));
+});
+
+// Merge / push / diff need migration tooling (and GitHub for push); not yet
+// implemented for self-host. Respond gracefully so the dashboard doesn't error.
+for (const op of ["merge", "push"] as const) {
+  projects.post(`/api/v1/branches/:id/${op}`, async (c) => {
+    await requireSession(c);
+    const branch = await loadBranchForRequest(c);
+    await requirePermission(c, branch.organizationId, { project: ["update"] });
+    throw new AppError(501, "not_implemented", `Branch ${op} is not yet supported on self-host`);
+  });
+}
+projects.get("/api/v1/branches/:id/diff", async (c) => {
+  await requireSession(c);
+  const branch = await loadBranchForRequest(c);
+  await requirePermission(c, branch.organizationId, { project: ["content"] });
+  return c.body("", 200, { "Content-Type": "text/plain" });
 });
 
 // JWT signing keys for a project: the current asymmetric ES256 key (in use) and the
