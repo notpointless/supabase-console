@@ -24,6 +24,7 @@ import { db } from "../db/client";
 import { eq, and } from "drizzle-orm";
 import { getProvisionerFor } from "./provisioner";
 import { listBackups, createBackup } from "./backups";
+import { readStandbyKeys, addStandbyKey, removeStandbyKey } from "./signing-keys-store";
 import { assertMfaCompliant } from "../auth/mfa";
 
 export const projects = new Hono();
@@ -325,7 +326,47 @@ projects.get("/api/v1/projects/:ref/signing-keys", async (c) => {
   return c.json({
     current: ec ? { kid: ec.kid, algorithm: "ES256", public_jwk: ec, created_at: createdAt } : null,
     legacy: legacy ? { kid: legacy.kid, algorithm: "HS256", created_at: createdAt } : null,
+    standby: readStandbyKeys(ref).map((k) => ({
+      kid: k.kid,
+      algorithm: k.algorithm,
+      status: k.status,
+      public_jwk: k.publicJwk,
+      created_at: k.created_at,
+    })),
   });
+});
+
+// Create a new standby ES256 signing key (rotation prep): generate it, persist it, and
+// re-apply the stack so every service can verify tokens signed with it.
+projects.post("/api/v1/projects/:ref/signing-keys", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const key = addStandbyKey(ref);
+  try {
+    await getProvisionerFor(row).reconfigure?.(row);
+  } catch {
+    /* key persisted; reconfigure is best-effort */
+  }
+  return c.json({ kid: key.kid, algorithm: key.algorithm, status: key.status, created_at: key.created_at });
+});
+
+// Revoke a standby signing key.
+projects.delete("/api/v1/projects/:ref/signing-keys/:kid", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  removeStandbyKey(ref, c.req.param("kid"));
+  try {
+    await getProvisionerFor(row).reconfigure?.(row);
+  } catch {
+    /* best-effort */
+  }
+  return c.json({ ok: true });
 });
 
 // Create the default new-format API keys. The keys are derived from the JWT secret,

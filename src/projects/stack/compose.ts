@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { parse, stringify } from "yaml";
 import type { ProjectSecretValues } from "../secrets";
 import { derivePublishableKey, deriveSecretKey, deriveSigningKeys } from "../secrets";
+import { readStandbyKeys } from "../signing-keys-store";
 import { STACK_ENV_DEFAULTS } from "./env-defaults";
 
 export interface BuildStackInput {
@@ -25,6 +26,12 @@ export async function buildStack(
   // so every service validates BOTH old symmetric tokens and the new asymmetric ones —
   // enabling signing keys without breaking anything.
   const signing = await deriveSigningKeys(input.secrets.jwtSecret);
+  // Merge any operator-created standby signing keys so the stack verifies tokens they
+  // sign (in the JWKS) and GoTrue knows about them (GOTRUE_JWT_KEYS).
+  const standby = readStandbyKeys(input.project.ref);
+  const jwtKeysArr = [...JSON.parse(signing.jwtKeys), ...standby.map((k) => k.privateJwk)];
+  const jwtJwksObj = JSON.parse(signing.jwtJwks) as { keys: unknown[] };
+  jwtJwksObj.keys.push(...standby.map((k) => k.publicJwk));
   const env: Record<string, string> = {
     ...STACK_ENV_DEFAULTS,
     POSTGRES_PASSWORD: input.dbPassword,
@@ -39,8 +46,8 @@ export async function buildStack(
     ANON_KEY_ASYMMETRIC: signing.anonAsymmetric,
     SERVICE_ROLE_KEY_ASYMMETRIC: signing.serviceAsymmetric,
     // GoTrue signs new tokens with these; all services verify via the JWKS.
-    JWT_KEYS: signing.jwtKeys,
-    JWT_JWKS: signing.jwtJwks,
+    JWT_KEYS: JSON.stringify(jwtKeysArr),
+    JWT_JWKS: JSON.stringify(jwtJwksObj),
     SECRET_KEY_BASE: input.secrets.secretKeyBase,
     DASHBOARD_PASSWORD: input.secrets.dashboardPassword,
     VAULT_ENC_KEY: input.secrets.vaultEncKey,
