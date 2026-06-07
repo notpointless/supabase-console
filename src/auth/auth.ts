@@ -21,6 +21,14 @@ export const auth = betterAuth({
   // install setup createUser + linkAccount + marker) in a real DB transaction.
   database: drizzleAdapter(db, { provider: "pg", transaction: true }),
   emailAndPassword: { enabled: true },
+  user: {
+    additionalFields: {
+      firstName: { type: "string", input: true, required: false },
+      lastName: { type: "string", input: true, required: false },
+      displayName: { type: "string", input: true, required: false },
+      username: { type: "string", input: true, required: false },
+    },
+  },
   // Namespace our cookies (default prefix is "better-auth"). The session cookie
   // and the cookie-cache cookie get explicit product names.
   advanced: {
