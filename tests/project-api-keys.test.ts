@@ -32,7 +32,15 @@ describe("project api-keys", () => {
     const body = await res.json();
     expect(body.anonKey.split(".")).toHaveLength(3);
     expect(body.serviceRoleKey.split(".")).toHaveLength(3);
-    expect(Object.keys(body).sort()).toEqual(["anonKey", "serviceRoleKey"]);
+    // Endpoint also exposes the new-format publishable/secret keys (sb_publishable_/sb_secret_).
+    expect(Object.keys(body).sort()).toEqual([
+      "anonKey",
+      "publishableKey",
+      "secretKey",
+      "serviceRoleKey",
+    ]);
+    expect(body.publishableKey).toMatch(/^sb_publishable_/);
+    expect(body.secretKey).toMatch(/^sb_secret_/);
   });
 
   it("404 for unknown project", async () => {
