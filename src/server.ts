@@ -1,3 +1,4 @@
+// [console fork] touch to force full tsx-watch reload
 import { serve } from "@hono/node-server";
 import { app } from "./app";
 import { getEnv } from "./config/env";

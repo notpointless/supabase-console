@@ -17,7 +17,7 @@ import {
   resumeProject,
   deleteProject,
 } from "./service";
-import { getProjectSecrets, derivePublishableKey, deriveSecretKey } from "./secrets";
+import { getProjectSecrets, derivePublishableKey, deriveSecretKey, deriveSigningKeys } from "./secrets";
 import type { Project } from "../db/schema";
 import { project, organization, member } from "../db/schema";
 import { db } from "../db/client";
@@ -267,6 +267,33 @@ projects.get("/api/v1/projects/:ref/api-keys", async (c) => {
     serviceRoleKey: secrets.serviceRoleKey,
     publishableKey: derivePublishableKey(secrets.jwtSecret),
     secretKey: deriveSecretKey(secrets.jwtSecret),
+  });
+});
+
+// JWT signing keys for a project: the current asymmetric ES256 key (in use) and the
+// legacy HS256 shared secret (still verifies older tokens). Derived from the project's
+// JWT secret, so stable + reproducible.
+projects.get("/api/v1/projects/:ref/signing-keys", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  const secrets = await getProjectSecrets(row.id);
+  if (!secrets) throw new AppError(404, "project_secrets_not_found", "Project secrets not found");
+  let signing;
+  try {
+    signing = await deriveSigningKeys(secrets.jwtSecret);
+  } catch (e) {
+    throw new AppError(500, "signing_key_error", `deriveSigningKeys failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const jwks = JSON.parse(signing.jwtJwks) as { keys: Array<Record<string, any>> };
+  const ec = jwks.keys.find((k) => k.kty === "EC");
+  const legacy = jwks.keys.find((k) => k.kty === "oct");
+  const createdAt = new Date(row.createdAt ?? Date.now()).toISOString();
+  return c.json({
+    current: ec ? { kid: ec.kid, algorithm: "ES256", public_jwk: ec, created_at: createdAt } : null,
+    legacy: legacy ? { kid: legacy.kid, algorithm: "HS256", created_at: createdAt } : null,
   });
 });
 

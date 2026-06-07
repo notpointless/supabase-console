@@ -107,7 +107,9 @@ export async function deriveSigningKeys(jwtSecret: string): Promise<{
     key_ops: ["verify"],
   };
 
-  const ecKey = await importJWK(privateJwk, "ES256");
+  // jose rejects key_ops/use it doesn't expect for signing, so import a MINIMAL JWK
+  // for signing; the key_ops-bearing JWK above is only for GoTrue's GOTRUE_JWT_KEYS.
+  const ecKey = await importJWK({ kty: "EC", crv: "P-256", d: b64url(d), x, y }, "ES256");
   const iat = Math.floor(Date.now() / 1000);
   const signAsym = (role: "anon" | "service_role") =>
     new SignJWT({ role, iss: "supabase" })
