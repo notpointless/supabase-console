@@ -2,6 +2,7 @@ import { createMiddleware } from "hono/factory";
 import { db } from "../db/client";
 import { auditLog } from "../db/schema";
 import { auth } from "../auth";
+import { deliverToDrains } from "./drains";
 
 const MUTATIONS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
@@ -26,6 +27,17 @@ export const auditMiddleware = createMiddleware(async (c, next) => {
       path,
       statusCode: c.res.status,
     });
+    // Fan out to the org's audit-log drains (fire-and-forget; never blocks/breaks).
+    if (organizationId) {
+      void deliverToDrains(organizationId, {
+        actor_user_id: session?.user.id ?? null,
+        organization_id: organizationId,
+        method,
+        path,
+        status_code: c.res.status,
+        timestamp: new Date().toISOString(),
+      }).catch(() => {});
+    }
   } catch {
     // best-effort: never fail the request because of audit logging
   }

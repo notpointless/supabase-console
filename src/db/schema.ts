@@ -141,6 +141,19 @@ export const projectFunctionSecret = pgTable("project_function_secret", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [unique("project_function_secret_name_uniq").on(t.projectId, t.name)]);
 
+// Audit-log drains: stream the org's audit events to an external sink (webhook).
+export const auditLogDrain = pgTable("audit_log_drain", {
+  id: uuid("id").defaultRandom().primaryKey(), // also the public "token"
+  organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  type: text("type").notNull().default("webhook"),
+  config: jsonb("config").notNull().$type<Record<string, unknown>>(),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const orgVercelConnection = pgTable("org_vercel_connection", {
   id: uuid("id").defaultRandom().primaryKey(),
   organizationId: text("organization_id").notNull().unique().references(() => organization.id, { onDelete: "cascade" }),
@@ -198,6 +211,7 @@ export type OrgOauthApp = typeof orgOauthApp.$inferSelect;
 export type OrgGithubConnection = typeof orgGithubConnection.$inferSelect;
 export type OrgGithubAppConfig = typeof orgGithubAppConfig.$inferSelect;
 export type ProjectFunctionSecret = typeof projectFunctionSecret.$inferSelect;
+export type AuditLogDrain = typeof auditLogDrain.$inferSelect;
 export type GithubAuthorization = typeof githubAuthorization.$inferSelect;
 export type GithubConnection = typeof githubConnection.$inferSelect;
 export type OrgVercelConnection = typeof orgVercelConnection.$inferSelect;

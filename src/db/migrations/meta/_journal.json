@@ -134,6 +134,13 @@
       "when": 1780863674416,
       "tag": "0018_project_function_secrets",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1780864197868,
+      "tag": "0019_audit_log_drains",
+      "breakpoints": true
     }
   ]
 }
