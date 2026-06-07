@@ -24,7 +24,7 @@ import { db } from "../db/client";
 import { eq, and } from "drizzle-orm";
 import { getProvisionerFor } from "./provisioner";
 import { listBackups, createBackup } from "./backups";
-import { readStandbyKeys, addStandbyKey, removeStandbyKey } from "./signing-keys-store";
+import { readStandbyKeys, addStandbyKey, removeStandbyKey, setStandbyKeyStatus } from "./signing-keys-store";
 import { assertMfaCompliant } from "../auth/mfa";
 
 export const projects = new Hono();
@@ -351,6 +351,28 @@ projects.post("/api/v1/projects/:ref/signing-keys", async (c) => {
     /* key persisted; reconfigure is best-effort */
   }
   return c.json({ kid: key.kid, algorithm: key.algorithm, status: key.status, created_at: key.created_at });
+});
+
+// Change a standby key's status (e.g. move to previously_used, or promote to in_use).
+projects.patch("/api/v1/projects/:ref/signing-keys/:kid", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const body = await c.req.json().catch(() => ({}) as any);
+  const status = body?.status as "in_use" | "standby" | "previously_used" | "revoked";
+  const ok = setStandbyKeyStatus(ref, c.req.param("kid"), status);
+  if (!ok) {
+    // The derived current ES256 key + legacy HS256 verifier aren't operator-managed.
+    throw new AppError(400, "key_not_managed", "This key's status is managed automatically");
+  }
+  try {
+    await getProvisionerFor(row).reconfigure?.(row);
+  } catch {
+    /* best-effort */
+  }
+  return c.json({ kid: c.req.param("kid"), status });
 });
 
 // Revoke a standby signing key.

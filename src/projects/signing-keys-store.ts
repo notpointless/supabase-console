@@ -72,3 +72,14 @@ export function removeStandbyKey(ref: string, kid: string): void {
     readStandbyKeys(ref).filter((k) => k.kid !== kid)
   );
 }
+
+export function setStandbyKeyStatus(ref: string, kid: string, status: StandbyKey["status"]): boolean {
+  const keys = readStandbyKeys(ref);
+  const key = keys.find((k) => k.kid === kid);
+  if (!key) return false;
+  key.status = status;
+  // GoTrue signs only with a key whose key_ops include "sign".
+  key.privateJwk.key_ops = status === "in_use" ? ["sign", "verify"] : ["verify"];
+  write(ref, keys);
+  return true;
+}
