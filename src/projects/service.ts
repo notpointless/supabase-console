@@ -7,6 +7,7 @@ import { isKnownRegion, isEc2Region } from "../regions";
 import { hasValidCredentials } from "../aws/credentials-service";
 import { getQueue } from "../jobs/queue";
 import { AppError } from "../http/error";
+import { getProvisionerFor } from "./provisioner";
 import { generateProjectSecrets, encryptedSecretColumns } from "./secrets";
 
 function generateRef(): string {
@@ -123,6 +124,37 @@ export async function resizeProject(ref: string, computeSize: string): Promise<v
   const size = MIN_DEDICATED_COMPUTE.has(computeSize) ? computeSize : "medium";
   await db.update(project).set({ computeSize: size, updatedAt: new Date() }).where(eq(project.ref, ref));
   await getQueue().enqueue("resize_compute", { ref });
+}
+
+// Read a dedicated project's disk (EBS) config live from AWS.
+export async function getProjectDisk(ref: string) {
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  if (row.infrastructureType === "shared") {
+    throw new AppError(400, "not_dedicated", "Disk settings only apply to dedicated projects");
+  }
+  const p = getProvisionerFor(row);
+  if (!p.getDiskConfig) throw new AppError(400, "unsupported", "Disk config not supported");
+  return p.getDiskConfig(row);
+}
+
+// Apply a new disk (EBS) config to a dedicated project (online ModifyVolume).
+export async function resizeProjectDisk(
+  ref: string,
+  cfg: { sizeGb: number; iops: number; throughput: number; type: string }
+): Promise<void> {
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  if (row.infrastructureType === "shared") {
+    throw new AppError(400, "not_dedicated", "Disk settings only apply to dedicated projects");
+  }
+  const p = getProvisionerFor(row);
+  if (!p.resizeDisk) throw new AppError(400, "unsupported", "Disk resize not supported");
+  // gp3 bounds (AWS): 1–16384 GiB, 3000–16000 IOPS, 125–1000 MB/s throughput.
+  const sizeGb = Math.max(8, Math.min(16384, Math.floor(cfg.sizeGb)));
+  const iops = Math.max(3000, Math.min(16000, Math.floor(cfg.iops)));
+  const throughput = Math.max(125, Math.min(1000, Math.floor(cfg.throughput)));
+  await p.resizeDisk(row, { sizeGb, iops, throughput, type: cfg.type || "gp3" });
 }
 
 export async function restartProject(ref: string, services?: string[]): Promise<void> {

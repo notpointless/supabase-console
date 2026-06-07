@@ -19,6 +19,14 @@ export interface ProvisionResult {
   connection: Connection;
 }
 
+// Dedicated (EC2) disk = the instance's root EBS volume.
+export interface DiskConfig {
+  sizeGb: number;
+  iops: number;
+  throughput: number;
+  type: string; // gp3 | gp2 | io2 | io1 | st1 | sc1
+}
+
 export interface Provisioner {
   provision(project: Project): Promise<ProvisionResult>;
   pause(project: Project): Promise<void>;
@@ -32,6 +40,10 @@ export interface Provisioner {
   // Change the project's compute (dedicated only): stop, switch to the instance type
   // for project.computeSize, start. Returns the (new) connection to persist.
   resize?(project: Project): Promise<Connection>;
+  // Read the dedicated instance's current disk (EBS) config.
+  getDiskConfig?(project: Project): Promise<DiskConfig>;
+  // Apply a new disk (EBS) config in place (ModifyVolume — online, no downtime).
+  resizeDisk?(project: Project, cfg: DiskConfig): Promise<void>;
 }
 
 // Phase-2 stand-in for the real engine (Phase 3 replaces this).

@@ -17,6 +17,8 @@ import {
   resumeProject,
   restartProject,
   resizeProject,
+  getProjectDisk,
+  resizeProjectDisk,
   deleteProject,
 } from "./service";
 import { getProjectSecrets, derivePublishableKey, deriveSecretKey, deriveSigningKeys } from "./secrets";
@@ -168,6 +170,35 @@ projects.post("/api/v1/projects/:ref/billing/addons", async (c) => {
   if (body.addon_type === "compute_instance" && body.addon_variant) {
     await resizeProject(ref, body.addon_variant.replace(/^ci_/, "")); // ci_large -> large
   }
+  return c.json({ ok: true });
+});
+
+// Disk (EBS) config for a dedicated project — live from AWS; ModifyVolume is online.
+projects.get("/api/v1/projects/:ref/disk", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  return c.json(await getProjectDisk(ref));
+});
+
+const diskSchema = z.object({
+  sizeGb: z.number().int().min(8).max(16384),
+  iops: z.number().int().min(3000).max(16000),
+  throughput: z.number().int().min(125).max(1000),
+  type: z.string().default("gp3"),
+});
+
+projects.post("/api/v1/projects/:ref/disk", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const parsed = diskSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) throw new AppError(400, "validation_error", "Invalid disk payload", parsed.error.flatten());
+  await resizeProjectDisk(ref, parsed.data);
   return c.json({ ok: true });
 });
 

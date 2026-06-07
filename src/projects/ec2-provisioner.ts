@@ -13,9 +13,11 @@ import {
   DescribeVpcsCommand,
   CreateDefaultVpcCommand,
   ModifyInstanceAttributeCommand,
+  DescribeVolumesCommand,
+  ModifyVolumeCommand,
 } from "@aws-sdk/client-ec2";
 
-import type { Provisioner, ProvisionResult, Connection } from "./provisioner";
+import type { Provisioner, ProvisionResult, Connection, DiskConfig } from "./provisioner";
 import type { Project } from "../db/schema";
 import { getProjectSecrets } from "./secrets";
 import { decrypt } from "../crypto/secrets";
@@ -363,6 +365,50 @@ export class Ec2Provisioner implements Provisioner {
       await new Promise((r) => setTimeout(r, 5000));
     }
     throw new Error(`EC2 instance ${instanceId} did not reach ${state} in time`);
+  }
+
+  // --- Disk (root EBS volume) ---
+  private async rootVolumeId(ec2: EC2Client, instanceId: string): Promise<string> {
+    const out = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
+    const inst = out.Reservations?.[0]?.Instances?.[0];
+    const root =
+      inst?.BlockDeviceMappings?.find((b) => b.DeviceName === inst?.RootDeviceName) ??
+      inst?.BlockDeviceMappings?.[0];
+    const volId = root?.Ebs?.VolumeId;
+    if (!volId) throw new Error("Could not resolve the instance's root EBS volume");
+    return volId;
+  }
+
+  async getDiskConfig(project: Project): Promise<DiskConfig> {
+    const creds = await getCredentials(project.organizationId);
+    const ec2 = clientFor(project.region, creds);
+    const volId = await this.rootVolumeId(ec2, instanceIdOf(project));
+    const out = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volId] }));
+    const v = out.Volumes?.[0];
+    return {
+      sizeGb: v?.Size ?? 8,
+      iops: v?.Iops ?? 3000,
+      throughput: v?.Throughput ?? 125,
+      type: v?.VolumeType ?? "gp3",
+    };
+  }
+
+  async resizeDisk(project: Project, cfg: DiskConfig): Promise<void> {
+    const creds = await getCredentials(project.organizationId);
+    const ec2 = clientFor(project.region, creds);
+    const volId = await this.rootVolumeId(ec2, instanceIdOf(project));
+    // ModifyVolume is an online operation (no stop needed). IOPS/throughput apply to
+    // gp3/io1/io2 only; throughput is gp3-only.
+    const supportsIops = cfg.type === "gp3" || cfg.type === "io1" || cfg.type === "io2";
+    await ec2.send(
+      new ModifyVolumeCommand({
+        VolumeId: volId,
+        Size: cfg.sizeGb,
+        VolumeType: cfg.type as DiskConfig["type"] as never,
+        Iops: supportsIops ? cfg.iops : undefined,
+        Throughput: cfg.type === "gp3" ? cfg.throughput : undefined,
+      })
+    );
   }
 
   async delete(project: Project): Promise<void> {
