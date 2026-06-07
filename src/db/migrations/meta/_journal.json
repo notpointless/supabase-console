@@ -127,6 +127,13 @@
       "when": 1780860657753,
       "tag": "0017_org_github_app",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1780863674416,
+      "tag": "0018_project_function_secrets",
+      "breakpoints": true
     }
   ]
 }

@@ -24,6 +24,7 @@ import { db } from "../db/client";
 import { eq, and } from "drizzle-orm";
 import { getProvisionerFor } from "./provisioner";
 import { listBackups, createBackup, backupFilePath, restoreBackup } from "./backups";
+import { listFunctionSecrets, setFunctionSecrets, deleteFunctionSecrets } from "./function-secrets";
 import { readFileSync } from "node:fs";
 import { listBranches, createBranch, getBranchById, deleteBranch, resetBranch, mapBranch, branchSchemaDiff } from "./branches";
 import { mergeBranchToProduction } from "../integrations/github-deploy";
@@ -334,6 +335,44 @@ projects.post("/api/v1/projects/:ref/backups/:id/restore", async (c) => {
   } catch (e) {
     throw new AppError(500, "restore_failed", e instanceof Error ? e.message : "Restore failed");
   }
+});
+
+// --- Edge Function secrets (Management API style) ---------------------------
+projects.get("/api/v1/projects/:ref/secrets", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  return c.json(await listFunctionSecrets(row.id));
+});
+
+const secretItem = z.object({ name: z.string().min(1), value: z.string() });
+projects.post("/api/v1/projects/:ref/secrets", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const parsed = z.array(secretItem).safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) throw new AppError(400, "validation_error", "Expected an array of {name,value}", parsed.error.flatten());
+  for (const s of parsed.data) {
+    if (/^SUPABASE_/.test(s.name)) {
+      throw new AppError(400, "validation_error", `Secret name must not start with SUPABASE_: ${s.name}`);
+    }
+  }
+  await setFunctionSecrets(row, parsed.data);
+  return c.json(await listFunctionSecrets(row.id), 201);
+});
+
+projects.delete("/api/v1/projects/:ref/secrets", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const body = await c.req.json().catch(() => null);
+  const names = Array.isArray(body) ? body.map(String) : [];
+  if (!names.length) throw new AppError(400, "validation_error", "Expected an array of secret names");
+  await deleteFunctionSecrets(row, names);
+  return c.json(await listFunctionSecrets(row.id));
 });
 
 // ---------------------------------------------------------------------------

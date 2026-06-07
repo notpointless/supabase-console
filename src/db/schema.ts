@@ -131,6 +131,16 @@ export const githubConnection = pgTable("github_connection", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [unique("github_connection_project_uniq").on(t.projectId)]);
 
+// User-defined Edge Function secrets (per project). Written to the functions
+// volume's .secrets.json and merged into each function's env by the main router.
+export const projectFunctionSecret = pgTable("project_function_secret", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull().references(() => project.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  valueEncrypted: text("value_encrypted").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [unique("project_function_secret_name_uniq").on(t.projectId, t.name)]);
+
 export const orgVercelConnection = pgTable("org_vercel_connection", {
   id: uuid("id").defaultRandom().primaryKey(),
   organizationId: text("organization_id").notNull().unique().references(() => organization.id, { onDelete: "cascade" }),
@@ -187,6 +197,7 @@ export type ProjectSecrets = typeof projectSecrets.$inferSelect;
 export type OrgOauthApp = typeof orgOauthApp.$inferSelect;
 export type OrgGithubConnection = typeof orgGithubConnection.$inferSelect;
 export type OrgGithubAppConfig = typeof orgGithubAppConfig.$inferSelect;
+export type ProjectFunctionSecret = typeof projectFunctionSecret.$inferSelect;
 export type GithubAuthorization = typeof githubAuthorization.$inferSelect;
 export type GithubConnection = typeof githubConnection.$inferSelect;
 export type OrgVercelConnection = typeof orgVercelConnection.$inferSelect;
