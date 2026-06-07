@@ -71,6 +71,22 @@ export const taskList = {
         .where(eq(project.ref, ref));
     }
   },
+  // [console fork] Daily logical backup of every active shared-infra project
+  // (scheduled via the worker crontab). Best-effort per project.
+  backup_all: async (): Promise<void> => {
+    const { createBackup } = await import("../projects/backups.js");
+    const rows = await db
+      .select()
+      .from(project)
+      .where(and(eq(project.status, "active"), eq(project.infrastructureType, "shared")));
+    for (const row of rows) {
+      try {
+        await createBackup(row);
+      } catch {
+        // best-effort; a failed backup for one project shouldn't stop the rest
+      }
+    }
+  },
 };
 
 export type TaskName = keyof typeof taskList;

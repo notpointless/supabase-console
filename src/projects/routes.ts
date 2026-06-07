@@ -23,6 +23,7 @@ import { project, organization, member } from "../db/schema";
 import { db } from "../db/client";
 import { eq, and } from "drizzle-orm";
 import { getProvisionerFor } from "./provisioner";
+import { listBackups, createBackup } from "./backups";
 import { assertMfaCompliant } from "../auth/mfa";
 
 export const projects = new Hono();
@@ -268,6 +269,36 @@ projects.get("/api/v1/projects/:ref/api-keys", async (c) => {
     publishableKey: derivePublishableKey(secrets.jwtSecret),
     secretKey: deriveSecretKey(secrets.jwtSecret),
   });
+});
+
+// Logical database backups (pg_dump). List + create-now.
+projects.get("/api/v1/projects/:ref/backups", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  return c.json({
+    backups: listBackups(ref),
+    region: row.region ?? "shared",
+    walg_enabled: false,
+    pitr_enabled: false,
+    physicalBackupData: {},
+  });
+});
+
+projects.post("/api/v1/projects/:ref/backups", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  try {
+    const backup = await createBackup(row);
+    return c.json(backup);
+  } catch (e) {
+    throw new AppError(500, "backup_failed", e instanceof Error ? e.message : "Backup failed");
+  }
 });
 
 // JWT signing keys for a project: the current asymmetric ES256 key (in use) and the
