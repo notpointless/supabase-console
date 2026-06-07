@@ -25,6 +25,7 @@ import { eq, and } from "drizzle-orm";
 import { getProvisionerFor } from "./provisioner";
 import { listBackups, createBackup } from "./backups";
 import { listBranches, createBranch, getBranchById, deleteBranch, resetBranch, mapBranch } from "./branches";
+import { mergeBranchToProduction } from "../integrations/github-deploy";
 import { readStandbyKeys, addStandbyKey, removeStandbyKey, setStandbyKeyStatus } from "./signing-keys-store";
 import { assertMfaCompliant } from "../auth/mfa";
 
@@ -390,16 +391,23 @@ projects.post("/api/v1/branches/:id/reset", async (c) => {
   return c.json(mapBranch(branch, branch.ref));
 });
 
-// Merge / push / diff need migration tooling (and GitHub for push); not yet
-// implemented for self-host. Respond gracefully so the dashboard doesn't error.
-for (const op of ["merge", "push"] as const) {
-  projects.post(`/api/v1/branches/:id/${op}`, async (c) => {
-    await requireSession(c);
-    const branch = await loadBranchForRequest(c);
-    await requirePermission(c, branch.organizationId, { project: ["update"] });
-    throw new AppError(501, "not_implemented", `Branch ${op} is not yet supported on self-host`);
-  });
-}
+// Merge: apply the branch's tracked Git-branch migrations to production.
+projects.post("/api/v1/branches/:id/merge", async (c) => {
+  await requireSession(c);
+  const branch = await loadBranchForRequest(c);
+  await requirePermission(c, branch.organizationId, { project: ["update"] });
+  const result = await mergeBranchToProduction(branch.id);
+  return c.json(result);
+});
+
+// Push (branch -> Git provider) needs write access to the repo; not implemented.
+// Respond gracefully so the dashboard shows a clear message rather than crashing.
+projects.post("/api/v1/branches/:id/push", async (c) => {
+  await requireSession(c);
+  const branch = await loadBranchForRequest(c);
+  await requirePermission(c, branch.organizationId, { project: ["update"] });
+  throw new AppError(501, "not_implemented", "Branch push is not yet supported on self-host");
+});
 projects.get("/api/v1/branches/:id/diff", async (c) => {
   await requireSession(c);
   const branch = await loadBranchForRequest(c);

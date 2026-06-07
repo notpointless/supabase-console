@@ -136,7 +136,39 @@ export interface DeployResult {
   skipped: string[];
 }
 
-/** Apply a project's connected repo migrations to its database (idempotent). */
+/** Core: apply a repo's migrations to a target project's DB (idempotent). */
+async function applyRepoMigrations(
+  targetRef: string,
+  repoFullName: string,
+  branch: string,
+  token?: string
+): Promise<DeployResult> {
+  const migrations = await fetchMigrations(repoFullName, branch, token);
+
+  // Ensure the migrations bookkeeping table exists.
+  await psql(
+    targetRef,
+    `create schema if not exists supabase_migrations;
+     create table if not exists supabase_migrations.schema_migrations (version text primary key, name text, statements text[], inserted_at timestamptz default now());`
+  );
+  const applied = await appliedVersions(targetRef);
+
+  const didApply: string[] = [];
+  const skipped: string[] = [];
+  for (const m of migrations) {
+    if (applied.has(m.version)) {
+      skipped.push(m.name);
+      continue;
+    }
+    // Apply the migration and record it in the same transaction.
+    const stmt = `begin;\n${m.sql}\n;\ninsert into supabase_migrations.schema_migrations(version, name) values (${quote(m.version)}, ${quote(m.name)}) on conflict (version) do nothing;\ncommit;`;
+    await psql(targetRef, stmt);
+    didApply.push(m.name);
+  }
+  return { repo: repoFullName, branch, applied: didApply, skipped };
+}
+
+/** Apply a project's connected repo migrations to its own database (idempotent). */
 export async function deployProject(ref: string): Promise<DeployResult> {
   const [proj] = await db.select().from(project).where(eq(project.ref, ref));
   if (!proj) throw new AppError(404, "project_not_found", "Project not found");
@@ -150,30 +182,37 @@ export async function deployProject(ref: string): Promise<DeployResult> {
   if (!conn) throw new AppError(400, "no_repo_connection", "No GitHub repository is connected to this project");
 
   const token = await githubToken(proj.organizationId);
-  const branch = conn.branch ?? "main";
-  const migrations = await fetchMigrations(conn.repoFullName, branch, token);
+  return applyRepoMigrations(ref, conn.repoFullName, conn.branch ?? "main", token);
+}
 
-  // Ensure the migrations bookkeeping table exists.
-  await psql(
-    ref,
-    `create schema if not exists supabase_migrations;
-     create table if not exists supabase_migrations.schema_migrations (version text primary key, name text, statements text[], inserted_at timestamptz default now());`
-  );
-  const applied = await appliedVersions(ref);
-
-  const didApply: string[] = [];
-  const skipped: string[] = [];
-  for (const m of migrations) {
-    if (applied.has(m.version)) {
-      skipped.push(m.name);
-      continue;
-    }
-    // Apply the migration and record it in the same transaction.
-    const stmt = `begin;\n${m.sql}\n;\ninsert into supabase_migrations.schema_migrations(version, name) values (${quote(m.version)}, ${quote(m.name)}) on conflict (version) do nothing;\ncommit;`;
-    await psql(ref, stmt);
-    didApply.push(m.name);
+/**
+ * Merge a preview branch into production: apply the branch's tracked Git-branch
+ * migrations to the PARENT (production) project. Requires the branch to track a
+ * repo (its own project_repo_connection, set when the branch was created from a
+ * PR). For branches without a repo link, merge via the Git provider instead.
+ */
+export async function mergeBranchToProduction(branchId: string): Promise<DeployResult> {
+  const [branch] = await db.select().from(project).where(eq(project.id, branchId));
+  if (!branch) throw new AppError(404, "branch_not_found", "Branch not found");
+  if (!branch.parentProjectId) throw new AppError(400, "not_a_branch", "This project is not a preview branch");
+  const [parent] = await db.select().from(project).where(eq(project.id, branch.parentProjectId));
+  if (!parent) throw new AppError(404, "project_not_found", "Parent project not found");
+  if (parent.infrastructureType !== "shared") {
+    throw new AppError(400, "merge_unsupported_infra", "Branch merge is only supported on shared infrastructure");
   }
-  return { repo: conn.repoFullName, branch, applied: didApply, skipped };
+  const [conn] = await db
+    .select()
+    .from(projectRepoConnection)
+    .where(eq(projectRepoConnection.projectId, branch.id));
+  if (!conn) {
+    throw new AppError(
+      400,
+      "branch_not_tracked",
+      "This branch isn't linked to a Git branch. Merge it through your Git provider, or connect a repo."
+    );
+  }
+  const token = await githubToken(parent.organizationId);
+  return applyRepoMigrations(parent.ref, conn.repoFullName, conn.branch ?? "main", token);
 }
 
 function quote(s: string): string {
