@@ -286,6 +286,7 @@ services:
             - apikey
             - x-client-info
             - x-upsert
+            - x-source
             - cache-control
             - x-requested-with
             - Tus-Resumable
