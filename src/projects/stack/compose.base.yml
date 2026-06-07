@@ -153,9 +153,8 @@ services:
       # Legacy symmetric HS256 key
       GOTRUE_JWT_SECRET: ${JWT_SECRET}
 
-      # JSON array of signing JWKs (EC private + legacy symmetric)
-      # For Podman, use: GOTRUE_JWT_KEYS: ${JWT_KEYS}
-      #GOTRUE_JWT_KEYS: ${JWT_KEYS:-[]}
+      # [console fork] Asymmetric ES256 signing keys; GoTrue signs new tokens with these.
+      GOTRUE_JWT_KEYS: ${JWT_KEYS:-[]}
 
       GOTRUE_JWT_ISSUER: ${API_EXTERNAL_URL}/auth/v1
 
@@ -310,9 +309,8 @@ services:
       # Legacy symmetric HS256 key
       API_JWT_SECRET: ${JWT_SECRET}
 
-      # JWKS for token verification (EC public + legacy symmetric).
-      # For Podman, use: API_JWT_JWKS: ${JWT_JWKS}
-      #API_JWT_JWKS: ${JWT_JWKS:-{"keys":[]}}
+      # [console fork] JWKS for token verification (EC public + legacy HS256).
+      API_JWT_JWKS: ${JWT_JWKS:-{"keys":[]}}
 
       SECRET_KEY_BASE: ${SECRET_KEY_BASE}
       METRICS_JWT_SECRET: ${JWT_SECRET}
@@ -359,9 +357,8 @@ services:
       # Legacy symmetric HS256 key
       AUTH_JWT_SECRET: ${JWT_SECRET}
 
-      # JWKS for token verification (EC public + legacy symmetric).
-      # For Podman, use: JWT_JWKS: ${JWT_JWKS}
-      #JWT_JWKS: ${JWT_JWKS:-{"keys":[]}}
+      # [console fork] JWKS for token verification (EC public + legacy HS256).
+      JWT_JWKS: ${JWT_JWKS:-{"keys":[]}}
 
       DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
       STORAGE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL}

@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse, stringify } from "yaml";
 import type { ProjectSecretValues } from "../secrets";
-import { derivePublishableKey, deriveSecretKey } from "../secrets";
+import { derivePublishableKey, deriveSecretKey, deriveSigningKeys } from "../secrets";
 import { STACK_ENV_DEFAULTS } from "./env-defaults";
 
 export interface BuildStackInput {
@@ -18,7 +18,13 @@ export interface BuildStackInput {
 
 const BASE_PATH = join(dirname(fileURLToPath(import.meta.url)), "compose.base.yml");
 
-export function buildStack(input: BuildStackInput): { composeYaml: string; env: Record<string, string> } {
+export async function buildStack(
+  input: BuildStackInput
+): Promise<{ composeYaml: string; env: Record<string, string> }> {
+  // Asymmetric (ES256) JWT signing keys. The JWKS also carries the legacy HS256 key,
+  // so every service validates BOTH old symmetric tokens and the new asymmetric ones —
+  // enabling signing keys without breaking anything.
+  const signing = await deriveSigningKeys(input.secrets.jwtSecret);
   const env: Record<string, string> = {
     ...STACK_ENV_DEFAULTS,
     POSTGRES_PASSWORD: input.dbPassword,
@@ -28,11 +34,13 @@ export function buildStack(input: BuildStackInput): { composeYaml: string; env: 
     // New-format API keys; kong accepts these as anon/service_role keyauth creds.
     SUPABASE_PUBLISHABLE_KEY: derivePublishableKey(input.secrets.jwtSecret),
     SUPABASE_SECRET_KEY: deriveSecretKey(input.secrets.jwtSecret),
-    // Kong's request-transformer swaps an incoming sb_ opaque key for these JWTs.
-    // We use the working HS256 anon/service_role JWTs so every project service
-    // (rest, storage, realtime, functions…) validates them, not just PostgREST.
-    ANON_KEY_ASYMMETRIC: input.secrets.anonKey,
-    SERVICE_ROLE_KEY_ASYMMETRIC: input.secrets.serviceRoleKey,
+    // Kong's request-transformer swaps an incoming sb_ opaque key for these
+    // ES256-signed JWTs (validated everywhere via the JWKS below).
+    ANON_KEY_ASYMMETRIC: signing.anonAsymmetric,
+    SERVICE_ROLE_KEY_ASYMMETRIC: signing.serviceAsymmetric,
+    // GoTrue signs new tokens with these; all services verify via the JWKS.
+    JWT_KEYS: signing.jwtKeys,
+    JWT_JWKS: signing.jwtJwks,
     SECRET_KEY_BASE: input.secrets.secretKeyBase,
     DASHBOARD_PASSWORD: input.secrets.dashboardPassword,
     VAULT_ENC_KEY: input.secrets.vaultEncKey,

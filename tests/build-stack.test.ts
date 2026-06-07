@@ -11,8 +11,8 @@ const input = {
 };
 
 describe("buildStack", () => {
-  it("produces valid YAML, a per-project compose name, and no colliding container_name", () => {
-    const { composeYaml } = buildStack(input);
+  it("produces valid YAML, a per-project compose name, and no colliding container_name", async () => {
+    const { composeYaml } = await buildStack(input);
     const doc = parse(composeYaml) as { name?: string; services: Record<string, Record<string, unknown>> };
     expect(doc.name).toBe("sb-abcdefghij1234567890");
     expect(Object.keys(doc.services).length).toBeGreaterThanOrEqual(10);
@@ -21,8 +21,8 @@ describe("buildStack", () => {
     }
   });
 
-  it("env carries the per-project dynamic values plus static defaults", () => {
-    const { env } = buildStack(input);
+  it("env carries the per-project dynamic values plus static defaults", async () => {
+    const { env } = await buildStack(input);
     expect(env.JWT_SECRET).toBe(input.secrets.jwtSecret);
     expect(env.ANON_KEY).toBe(input.secrets.anonKey);
     expect(env.SERVICE_ROLE_KEY).toBe(input.secrets.serviceRoleKey);
