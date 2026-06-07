@@ -26,6 +26,9 @@ export interface Provisioner {
   delete(project: Project): Promise<void>;
   // Re-apply stack config (e.g. Data API on/off) in place, preserving ports.
   reconfigure?(project: Project): Promise<void>;
+  // Restart the project's services. `services` (mapped compose service names) is a
+  // best-effort hint; infra that can only restart the whole stack/instance ignores it.
+  restart?(project: Project, services?: string[]): Promise<void>;
 }
 
 // Phase-2 stand-in for the real engine (Phase 3 replaces this).

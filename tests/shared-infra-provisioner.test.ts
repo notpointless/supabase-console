@@ -25,7 +25,7 @@ describe("SharedInfraProvisioner", () => {
 
   it("provision writes stack, allocates ports, calls up, returns secret-free connection", async () => {
     const calls: string[] = [];
-    setComposeRunner({ up: async () => { calls.push("up"); }, stop: async () => {}, start: async () => {}, down: async () => {} });
+    setComposeRunner({ up: async () => { calls.push("up"); }, stop: async () => {}, start: async () => {}, down: async () => {}, restart: async () => {} });
     const row = await seed();
     const res = await new SharedInfraProvisioner().provision(row);
     expect(calls).toEqual(["up"]);
@@ -38,7 +38,7 @@ describe("SharedInfraProvisioner", () => {
   });
 
   it("propagates up() failure", async () => {
-    setComposeRunner({ up: async () => { throw new Error("docker boom"); }, stop: async () => {}, start: async () => {}, down: async () => {} });
+    setComposeRunner({ up: async () => { throw new Error("docker boom"); }, stop: async () => {}, start: async () => {}, down: async () => {}, restart: async () => {} });
     const row = await seed();
     await expect(new SharedInfraProvisioner().provision(row)).rejects.toThrow(/boom/);
     rmSync(projectDir(row.ref), { recursive: true, force: true });
@@ -46,7 +46,7 @@ describe("SharedInfraProvisioner", () => {
 
   it("delete calls down and removes the dir", async () => {
     const calls: string[] = [];
-    setComposeRunner({ up: async () => {}, stop: async () => {}, start: async () => {}, down: async () => { calls.push("down"); } });
+    setComposeRunner({ up: async () => {}, stop: async () => {}, start: async () => {}, down: async () => { calls.push("down"); }, restart: async () => {} });
     const row = await seed();
     await new SharedInfraProvisioner().provision(row);
     await new SharedInfraProvisioner().delete(row);

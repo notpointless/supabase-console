@@ -19,7 +19,7 @@ export class SharedInfraProvisioner implements Provisioner {
     const ports = await allocatePorts(project.id);
     const host = getEnv().PUBLIC_HOST;
     const apiUrl = `http://${host}:${ports.kongHttpPort}`;
-    const { composeYaml, env } = buildStack({
+    const { composeYaml, env } = await buildStack({
       project: { ref: project.ref, name: project.name },
       secrets,
       dbPassword: decrypt(project.dbPasswordEncrypted),
@@ -53,7 +53,7 @@ export class SharedInfraProvisioner implements Provisioner {
     }
     const host = getEnv().PUBLIC_HOST;
     const apiUrl = `http://${host}:${project.kongHttpPort}`;
-    const { composeYaml, env } = buildStack({
+    const { composeYaml, env } = await buildStack({
       project: { ref: project.ref, name: project.name },
       secrets,
       dbPassword: decrypt(project.dbPasswordEncrypted),
@@ -71,6 +71,10 @@ export class SharedInfraProvisioner implements Provisioner {
 
   async resume(project: Project): Promise<void> {
     await getComposeRunner().start(projectDir(project.ref), name(project.ref));
+  }
+
+  async restart(project: Project, services?: string[]): Promise<void> {
+    await getComposeRunner().restart(projectDir(project.ref), name(project.ref), services ?? []);
   }
 
   async delete(project: Project): Promise<void> {

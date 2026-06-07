@@ -83,6 +83,33 @@ export async function resumeProject(ref: string): Promise<void> {
   await getQueue().enqueue("resume", { ref });
 }
 
+// Map the dashboard's logical service names to our compose service names.
+const SERVICE_NAME_MAP: Record<string, string> = {
+  postgresql: "db",
+  database: "db",
+  db: "db",
+  postgrest: "rest",
+  rest: "rest",
+  api: "rest",
+  gotrue: "auth",
+  auth: "auth",
+  pgbouncer: "supavisor",
+  pooler: "supavisor",
+  supavisor: "supavisor",
+  realtime: "realtime",
+  storage: "storage",
+  functions: "functions",
+  meta: "meta",
+  kong: "kong",
+};
+
+export async function restartProject(ref: string, services?: string[]): Promise<void> {
+  const mapped = (services ?? [])
+    .map((s) => SERVICE_NAME_MAP[s.toLowerCase()] ?? s)
+    .filter((s, i, a) => a.indexOf(s) === i);
+  await getQueue().enqueue("restart", { ref, services: mapped });
+}
+
 export async function deleteProject(ref: string): Promise<void> {
   await db.update(project).set({ status: "removing", updatedAt: new Date() }).where(eq(project.ref, ref));
   await getQueue().enqueue("delete", { ref });

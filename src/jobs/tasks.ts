@@ -57,6 +57,15 @@ export const taskList = {
         .where(eq(project.ref, ref));
     }
   },
+  restart: async (payload: unknown): Promise<void> => {
+    // Restart is non-destructive — don't flip status to "failed" on error (the
+    // services are still whatever they were); just attempt + surface via the queue.
+    const { ref, services } = payload as { ref: string; services?: string[] };
+    const row = await loadByRef(ref);
+    if (!row) return;
+    await getProvisionerFor(row).restart?.(row, services);
+    await db.update(project).set({ updatedAt: new Date() }).where(eq(project.ref, ref));
+  },
   delete: async (payload: unknown): Promise<void> => {
     const { ref } = payload as { ref: string };
     const row = await loadByRef(ref);

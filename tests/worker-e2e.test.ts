@@ -13,7 +13,7 @@ const json = (body: unknown, cookie = "") => {
 let runner: Awaited<ReturnType<typeof startWorker>> | undefined;
 
 describe("real graphile worker", () => {
-  beforeEach(() => { resetQueue(); resetComposeRunner(); setComposeRunner({ up: async () => {}, stop: async () => {}, start: async () => {}, down: async () => {} }); });
+  beforeEach(() => { resetQueue(); resetComposeRunner(); setComposeRunner({ up: async () => {}, stop: async () => {}, start: async () => {}, down: async () => {}, restart: async () => {} }); });
   afterAll(async () => { await runner?.stop?.(); resetComposeRunner(); });
 
   it("provisions a project asynchronously via the real worker", async () => {

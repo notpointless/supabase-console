@@ -23,7 +23,7 @@ describe("compose-runner", () => {
   });
 
   it("can be overridden (test seam)", () => {
-    const fake: ComposeRunner = { up: async () => {}, stop: async () => {}, start: async () => {}, down: async () => {} };
+    const fake: ComposeRunner = { up: async () => {}, stop: async () => {}, start: async () => {}, down: async () => {}, restart: async () => {} };
     setComposeRunner(fake);
     expect(getComposeRunner()).toBe(fake);
   });

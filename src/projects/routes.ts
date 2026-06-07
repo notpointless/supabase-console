@@ -15,6 +15,7 @@ import {
   listProjects,
   pauseProject,
   resumeProject,
+  restartProject,
   deleteProject,
 } from "./service";
 import { getProjectSecrets, derivePublishableKey, deriveSecretKey, deriveSigningKeys } from "./secrets";
@@ -141,6 +142,33 @@ projects.post("/api/v1/projects/:ref/resume", async (c) => {
   await requirePermission(c, row.organizationId, { project: ["update"] });
   await resumeProject(ref);
   return c.json(publicProject((await getProjectByRef(ref))!));
+});
+
+// Restart the whole project stack.
+projects.post("/api/v1/projects/:ref/restart", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  await restartProject(ref);
+  return c.json(publicProject(row));
+});
+
+// Restart specific services (body: { services: string[] } or { restartRequest: { services } }).
+projects.post("/api/v1/projects/:ref/restart-services", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const body = (await c.req.json().catch(() => ({}))) as {
+    services?: string[];
+    restartRequest?: { services?: string[] };
+  };
+  const services = body.restartRequest?.services ?? body.services ?? [];
+  await restartProject(ref, services);
+  return c.json(publicProject(row));
 });
 
 // Enable/disable the REST Data API for a project (toggle public schema exposure).

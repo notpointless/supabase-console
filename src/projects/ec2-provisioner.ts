@@ -3,6 +3,7 @@ import {
   RunInstancesCommand,
   StartInstancesCommand,
   StopInstancesCommand,
+  RebootInstancesCommand,
   TerminateInstancesCommand,
   DescribeInstancesCommand,
   DescribeImagesCommand,
@@ -138,7 +139,7 @@ export class Ec2Provisioner implements Provisioner {
     const ec2 = clientFor(project.region, creds);
 
     // Build the stack env (fixed self-hosting ports; URLs are finalised on the box).
-    const { env } = buildStack({
+    const { env } = await buildStack({
       project: { ref: project.ref, name: project.name },
       secrets,
       dbPassword: decrypt(project.dbPasswordEncrypted),
@@ -218,6 +219,14 @@ export class Ec2Provisioner implements Provisioner {
     const creds = await getCredentials(project.organizationId);
     const ec2 = clientFor(project.region, creds);
     await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceIdOf(project)] }));
+  }
+
+  // Dedicated instances reboot the whole box (the stack auto-starts via
+  // restart:unless-stopped); per-service restart isn't available over the EC2 API.
+  async restart(project: Project): Promise<void> {
+    const creds = await getCredentials(project.organizationId);
+    const ec2 = clientFor(project.region, creds);
+    await ec2.send(new RebootInstancesCommand({ InstanceIds: [instanceIdOf(project)] }));
   }
 
   async delete(project: Project): Promise<void> {

@@ -16,7 +16,7 @@ describe("shared provisioning via worker", () => {
 
   it("a shared project provisions via SharedInfra (fake docker) to active with apiUrl + ports", async () => {
     const ups: string[] = [];
-    setComposeRunner({ up: async (_d, p) => { ups.push(p); }, stop: async () => {}, start: async () => {}, down: async () => {} });
+    setComposeRunner({ up: async (_d, p) => { ups.push(p); }, stop: async () => {}, start: async () => {}, down: async () => {}, restart: async () => {} });
     const cookie = await owner();
     const orgId = await org(cookie);
     const res = await app.request(`/api/v1/organizations/${orgId}/projects`, json({ name: "P", region: "shared", dbPassword: "supersecret123" }, cookie));
@@ -29,7 +29,7 @@ describe("shared provisioning via worker", () => {
   });
 
   it("provision failure marks the project failed", async () => {
-    setComposeRunner({ up: async () => { throw new Error("docker down"); }, stop: async () => {}, start: async () => {}, down: async () => {} });
+    setComposeRunner({ up: async () => { throw new Error("docker down"); }, stop: async () => {}, start: async () => {}, down: async () => {}, restart: async () => {} });
     const cookie = await owner();
     const orgId = await org(cookie);
     const p = await (await app.request(`/api/v1/organizations/${orgId}/projects`, json({ name: "P", region: "shared", dbPassword: "supersecret123" }, cookie))).json();

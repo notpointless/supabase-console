@@ -6,6 +6,7 @@ export interface ComposeRunner {
   stop(dir: string, project: string): Promise<void>;
   start(dir: string, project: string): Promise<void>;
   down(dir: string, project: string): Promise<void>;
+  restart(dir: string, project: string, services?: string[]): Promise<void>;
 }
 
 export type Exec = (cmd: string, args: string[]) => Promise<void>;
@@ -26,6 +27,9 @@ export class DockerComposeRunner implements ComposeRunner {
   stop(dir: string, project: string) { return this.exec("docker", [...this.base(dir, project), "stop"]); }
   start(dir: string, project: string) { return this.exec("docker", [...this.base(dir, project), "start"]); }
   down(dir: string, project: string) { return this.exec("docker", [...this.base(dir, project), "down", "-v"]); }
+  restart(dir: string, project: string, services: string[] = []) {
+    return this.exec("docker", [...this.base(dir, project), "restart", ...services]);
+  }
 }
 
 let current: ComposeRunner | undefined;
