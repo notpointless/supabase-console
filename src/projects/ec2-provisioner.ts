@@ -22,9 +22,26 @@ import { buildStack } from "./stack/compose";
 import { getCredentials } from "../aws/credentials-service";
 
 // Default instance type for a dedicated project (compute size is not yet persisted
-// per-project). Overridable via EC2_INSTANCE_TYPE; default t3.micro to minimize cost
-// (note: the full stack wants more RAM than micro has — bump for production workloads).
-const DEFAULT_INSTANCE_TYPE = process.env.EC2_INSTANCE_TYPE || "t3.micro";
+// Map the dashboard's compute tier -> a real EC2 instance type. The full supabase
+// stack needs ~4GB RAM, so the SMALLEST we ever launch is t3.medium (4GB) — tiers
+// below that (micro/small) are filtered out of the dedicated selector in the UI.
+const COMPUTE_SIZE_TO_INSTANCE_TYPE: Record<string, string> = {
+  micro: "t3.medium", // floor — should be filtered in the UI, but never launch <4GB
+  small: "t3.medium",
+  medium: "t3.medium", // 4 GB
+  large: "t3.large", // 8 GB
+  xlarge: "t3.xlarge", // 16 GB
+  "2xlarge": "t3.2xlarge", // 32 GB
+  "4xlarge": "m5.4xlarge", // 64 GB
+  "8xlarge": "m5.8xlarge", // 128 GB
+  "12xlarge": "m5.12xlarge", // 192 GB
+  "16xlarge": "m5.16xlarge", // 256 GB
+};
+// EC2_INSTANCE_TYPE overrides everything (testing). Otherwise default to medium (4GB).
+function instanceTypeFor(computeSize: string | null | undefined): string {
+  if (process.env.EC2_INSTANCE_TYPE) return process.env.EC2_INSTANCE_TYPE;
+  return COMPUTE_SIZE_TO_INSTANCE_TYPE[computeSize ?? "medium"] ?? "t3.medium";
+}
 const SG_NAME = "supabase-console-dedicated";
 // [console fork] The self-host stack only works with OUR fork of supabase, not
 // upstream. Overridable via env for private forks / pinned branches.
@@ -207,7 +224,7 @@ export class Ec2Provisioner implements Provisioner {
     const run = await ec2.send(
       new RunInstancesCommand({
         ImageId: imageId,
-        InstanceType: DEFAULT_INSTANCE_TYPE as any,
+        InstanceType: instanceTypeFor(project.computeSize) as any,
         MinCount: 1,
         MaxCount: 1,
         SecurityGroupIds: [groupId],

@@ -21,11 +21,15 @@ export interface CreateProjectInput {
   region: string;
   dbPassword: string;
   postgresType?: "postgres" | "orioledb";
+  computeSize?: string;
   dataApiEnabled?: boolean;
   autoExposeNewTables?: boolean;
   autoEnableRls?: boolean;
   createdBy: string;
 }
+
+// Dedicated projects need >=4GB; never accept a tier the stack can't run on.
+const MIN_DEDICATED_COMPUTE = new Set(["medium", "large", "xlarge", "2xlarge", "4xlarge", "8xlarge", "12xlarge", "16xlarge"]);
 
 export async function createProject(input: CreateProjectInput): Promise<Project> {
   if (!isKnownRegion(input.region)) {
@@ -38,6 +42,11 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
     }
     infrastructureType = "dedicated_ec2";
   }
+  // Floor the dedicated tier at "medium" (4GB) — micro/small can't run the stack.
+  const computeSize =
+    infrastructureType === "dedicated_ec2" && !MIN_DEDICATED_COMPUTE.has(input.computeSize ?? "")
+      ? "medium"
+      : (input.computeSize ?? "medium");
   const ref = generateRef();
   const secrets = await generateProjectSecrets();
   await db.transaction(async (tx) => {
@@ -47,6 +56,7 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
       name: input.name,
       region: input.region,
       infrastructureType,
+      computeSize,
       postgresType: input.postgresType ?? "postgres",
       status: "provisioning",
       dataApiEnabled: input.dataApiEnabled ?? true,

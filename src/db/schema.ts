@@ -13,6 +13,7 @@ export const project = pgTable("project", {
   name: text("name").notNull(),
   region: text("region").notNull(),
   infrastructureType: text("infrastructure_type").notNull(), // shared | dedicated_ec2
+  computeSize: text("compute_size").notNull().default("medium"), // dedicated tier -> EC2 instance type
   postgresType: text("postgres_type").notNull().default("postgres"), // postgres | orioledb
   status: text("status").notNull().default("provisioning"), // provisioning|active|paused|removing|failed
   dataApiEnabled: boolean("data_api_enabled").notNull().default(true),

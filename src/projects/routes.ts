@@ -92,6 +92,7 @@ const createSchema = z.object({
   region: z.string().min(1),
   dbPassword: z.string().min(8),
   postgresType: z.enum(["postgres", "orioledb"]).optional(),
+  computeSize: z.string().optional(),
   dataApiEnabled: z.boolean().optional(),
   autoExposeNewTables: z.boolean().optional(),
   autoEnableRls: z.boolean().optional(),

@@ -1,0 +1,1 @@
+ALTER TABLE "project" ADD COLUMN "compute_size" text DEFAULT 'medium' NOT NULL;
