@@ -417,8 +417,16 @@ projects.post("/api/v1/projects/:ref/branches", async (c) => {
 
 // Branch-scoped operations are keyed by the branch's project id.
 async function loadBranchForRequest(c: any) {
-  const id = c.req.param("id");
-  const branch = await getBranchById(id);
+  // The dashboard's path param is {branch_id_or_ref}: it may be our branch uuid
+  // OR the branch project's ref. Resolve either so delete/reset/merge always work.
+  const idOrRef = c.req.param("id");
+  let branch = null;
+  if (/^[0-9a-fA-F-]{36}$/.test(idOrRef)) {
+    branch = await getBranchById(idOrRef);
+  }
+  if (!branch) {
+    branch = await getProjectByRef(idOrRef);
+  }
   if (!branch) throw new AppError(404, "branch_not_found", "Branch not found");
   return branch;
 }
