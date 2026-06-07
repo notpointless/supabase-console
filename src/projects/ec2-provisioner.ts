@@ -22,6 +22,10 @@ import { getCredentials } from "../aws/credentials-service";
 // per-project; t3.large comfortably runs the full self-hosting stack).
 const DEFAULT_INSTANCE_TYPE = "t3.large";
 const SG_NAME = "supabase-console-dedicated";
+// [console fork] The self-host stack only works with OUR fork of supabase, not
+// upstream. Overridable via env for private forks / pinned branches.
+const SUPABASE_FORK_REPO = process.env.SUPABASE_FORK_REPO ?? "https://github.com/notpointless/supabase";
+const SUPABASE_FORK_BRANCH = process.env.SUPABASE_FORK_BRANCH ?? "chore/console-fork";
 // Ports the Supabase self-hosting stack exposes via Kong, plus Postgres + SSH.
 const INGRESS_PORTS = [22, 5432, 8000, 8443];
 
@@ -91,13 +95,17 @@ function userData(env: Record<string, string>): string {
   const envB64 = Buffer.from(envLines, "utf8").toString("base64");
   const script = `#!/bin/bash
 set -euxo pipefail
+SUPABASE_FORK_REPO="${SUPABASE_FORK_REPO}"
+SUPABASE_FORK_BRANCH="${SUPABASE_FORK_BRANCH}"
 dnf install -y docker git || yum install -y docker git
 systemctl enable --now docker
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-git clone --depth 1 https://github.com/supabase/supabase /opt/supabase
+# [console fork] Use OUR fork of supabase (notpointless/supabase) — the self-host
+# stack only works with our console-fork customizations, not upstream.
+git clone --depth 1 --branch "${SUPABASE_FORK_BRANCH}" "${SUPABASE_FORK_REPO}" /opt/supabase
 cd /opt/supabase/docker
 cp .env.example .env
 # Override defaults with our project secrets (later duplicate keys win in compose).
