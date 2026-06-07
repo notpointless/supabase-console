@@ -152,3 +152,129 @@ accessTokens.delete("/api/v1/account/access-tokens/:id", async (c) => {
 
   return c.json({ ok: true });
 });
+
+// ===========================================================================
+// Scoped access tokens (/platform/profile/scoped-access-tokens). Same apiKey
+// plugin, but the scopes (permissions + org/project restrictions) live in the
+// key's metadata. Token is returned raw exactly once on create.
+// ===========================================================================
+const scopedCreateSchema = z.object({
+  name: z.string().min(1),
+  expires_at: z.string().datetime().optional(),
+  organization_slugs: z.array(z.string()).optional(),
+  project_refs: z.array(z.string()).optional(),
+  permissions: z.array(z.string()).default([]),
+});
+
+interface ScopedMeta {
+  scoped: true;
+  permissions: string[];
+  organization_slugs?: string[];
+  project_refs?: string[];
+}
+
+function aliasOf(k: { start: string | null; prefix: string | null }): string {
+  return k.start ? `${k.start}…` : `${k.prefix ?? "sbp_"}…`;
+}
+
+accessTokens.post("/api/v1/account/scoped-access-tokens", async (c) => {
+  await requireSession(c);
+  const parsed = scopedCreateSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    throw new AppError(400, "validation_error", "Invalid payload", parsed.error.flatten());
+  }
+  const { name, expires_at, organization_slugs, project_refs, permissions } = parsed.data;
+  const expiresIn = expires_at
+    ? Math.max(60, Math.floor((new Date(expires_at).getTime() - Date.now()) / 1000))
+    : undefined;
+
+  const metadata: ScopedMeta = { scoped: true, permissions, organization_slugs, project_refs };
+  const result = (await auth.api.createApiKey({
+    body: { name, expiresIn, prefix: "sbp_", metadata },
+    headers: c.req.raw.headers,
+  })) as {
+    id: string;
+    key: string;
+    name: string | null;
+    start: string | null;
+    prefix: string | null;
+    expiresAt: Date | null;
+    createdAt: Date;
+  };
+
+  return c.json({
+    id: result.id,
+    name: result.name ?? name,
+    token: result.key,
+    token_alias: aliasOf(result),
+    created_at: result.createdAt,
+    expires_at: result.expiresAt,
+    last_used_at: null,
+    permissions,
+    organization_slugs: organization_slugs ?? [],
+    project_refs: project_refs ?? [],
+  });
+});
+
+function mapScoped(k: {
+  id: string;
+  name: string | null;
+  start: string | null;
+  prefix: string | null;
+  createdAt: Date;
+  expiresAt: Date | null;
+  lastRequest?: Date | null;
+  metadata: Record<string, unknown> | null;
+}) {
+  const meta = (k.metadata ?? {}) as Partial<ScopedMeta>;
+  return {
+    id: k.id,
+    name: k.name,
+    token_alias: aliasOf(k),
+    created_at: k.createdAt,
+    expires_at: k.expiresAt,
+    last_used_at: k.lastRequest ?? null,
+    permissions: meta.permissions ?? [],
+    organization_slugs: meta.organization_slugs ?? [],
+    project_refs: meta.project_refs ?? [],
+  };
+}
+
+accessTokens.get("/api/v1/account/scoped-access-tokens", async (c) => {
+  await requireSession(c);
+  const result = (await auth.api.listApiKeys({ headers: c.req.raw.headers })) as {
+    apiKeys: Array<Parameters<typeof mapScoped>[0] & { metadata: Record<string, unknown> | null }>;
+  };
+  const scoped = result.apiKeys.filter(
+    (k) => (k.metadata as { scoped?: boolean } | null)?.scoped === true,
+  );
+  return c.json(scoped.map(mapScoped));
+});
+
+accessTokens.get("/api/v1/account/scoped-access-tokens/:id", async (c) => {
+  await requireSession(c);
+  const id = c.req.param("id");
+  const result = (await auth.api.listApiKeys({ headers: c.req.raw.headers })) as {
+    apiKeys: Array<Parameters<typeof mapScoped>[0] & { metadata: Record<string, unknown> | null }>;
+  };
+  const k = result.apiKeys.find((x) => x.id === id);
+  if (!k || (k.metadata as { scoped?: boolean } | null)?.scoped !== true) {
+    throw new AppError(404, "not_found", "Token not found");
+  }
+  return c.json(mapScoped(k));
+});
+
+accessTokens.delete("/api/v1/account/scoped-access-tokens/:id", async (c) => {
+  await requireSession(c);
+  const keyId = c.req.param("id");
+  try {
+    await auth.api.deleteApiKey({ body: { keyId }, headers: c.req.raw.headers });
+  } catch (e) {
+    if (e != null && typeof e === "object" && "statusCode" in e) {
+      const err = e as { statusCode: number; message?: string };
+      throw new AppError(err.statusCode, "api_key_error", err.message ?? "API key operation failed");
+    }
+    throw e;
+  }
+  return c.json({ ok: true });
+});
