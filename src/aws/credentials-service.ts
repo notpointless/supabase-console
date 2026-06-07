@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { orgAwsCredentials } from "../db/schema";
-import { encrypt } from "../crypto/secrets";
+import { encrypt, decrypt } from "../crypto/secrets";
 import { getValidator } from "./credential-validator";
 
 export interface SetCredentialsInput {
@@ -86,4 +86,32 @@ export async function hasValidCredentials(organizationId: string): Promise<boole
 
 export async function deleteCredentials(organizationId: string): Promise<void> {
   await db.delete(orgAwsCredentials).where(eq(orgAwsCredentials.organizationId, organizationId));
+}
+
+export interface ResolvedCredentials {
+  accessKeyId: string;
+  secretAccessKey: string;
+  defaultRegion: string;
+}
+
+/**
+ * Returns the organization's decrypted AWS credentials for use by the EC2
+ * provisioner. Throws if none are stored. The plaintext secret never leaves the
+ * server (used only to construct AWS SDK clients).
+ */
+export async function getCredentials(organizationId: string): Promise<ResolvedCredentials> {
+  const [row] = await db
+    .select({
+      accessKeyId: orgAwsCredentials.accessKeyId,
+      secretAccessKeyEncrypted: orgAwsCredentials.secretAccessKeyEncrypted,
+      defaultRegion: orgAwsCredentials.defaultRegion,
+    })
+    .from(orgAwsCredentials)
+    .where(eq(orgAwsCredentials.organizationId, organizationId));
+  if (!row) throw new Error(`No AWS credentials for organization ${organizationId}`);
+  return {
+    accessKeyId: row.accessKeyId,
+    secretAccessKey: decrypt(row.secretAccessKeyEncrypted),
+    defaultRegion: row.defaultRegion,
+  };
 }
