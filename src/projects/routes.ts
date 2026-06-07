@@ -19,6 +19,10 @@ import {
 } from "./service";
 import { getProjectSecrets } from "./secrets";
 import type { Project } from "../db/schema";
+import { project } from "../db/schema";
+import { db } from "../db/client";
+import { eq } from "drizzle-orm";
+import { getProvisionerFor } from "./provisioner";
 import { assertMfaCompliant } from "../auth/mfa";
 
 export const projects = new Hono();
@@ -131,6 +135,29 @@ projects.post("/api/v1/projects/:ref/resume", async (c) => {
   await requirePermission(c, row.organizationId, { project: ["update"] });
   await resumeProject(ref);
   return c.json(publicProject((await getProjectByRef(ref))!));
+});
+
+// Enable/disable the REST Data API for a project (toggle public schema exposure).
+projects.patch("/api/v1/projects/:ref/data-api", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const body = await c.req.json().catch(() => ({}) as any);
+  const enabled = !!body.enabled;
+  await db
+    .update(project)
+    .set({ dataApiEnabled: enabled, autoExposeNewTables: enabled, updatedAt: new Date() })
+    .where(eq(project.ref, ref));
+  const updated = (await getProjectByRef(ref))!;
+  // Re-apply to the running stack so PostgREST schema exposure changes immediately.
+  try {
+    await getProvisionerFor(updated).reconfigure?.(updated);
+  } catch {
+    /* best-effort; flag is persisted regardless */
+  }
+  return c.json(publicProject(updated));
 });
 
 projects.delete("/api/v1/projects/:ref", async (c) => {

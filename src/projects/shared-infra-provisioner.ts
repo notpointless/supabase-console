@@ -40,6 +40,31 @@ export class SharedInfraProvisioner implements Provisioner {
     };
   }
 
+  // [console fork] Re-apply the stack env (e.g. Data API on/off) WITHOUT
+  // reallocating ports — reuses the project's already-assigned ports so the
+  // running connection is preserved, then recreates changed containers.
+  async reconfigure(project: Project): Promise<void> {
+    const secrets = await getProjectSecrets(project.id);
+    if (!secrets) throw new Error(`No secrets for project ${project.ref}`);
+    if (project.kongHttpPort == null || project.kongHttpsPort == null || project.dbPort == null) {
+      // never provisioned with stored ports — fall back to a full provision
+      await this.provision(project);
+      return;
+    }
+    const host = getEnv().PUBLIC_HOST;
+    const apiUrl = `http://${host}:${project.kongHttpPort}`;
+    const { composeYaml, env } = buildStack({
+      project: { ref: project.ref, name: project.name },
+      secrets,
+      dbPassword: decrypt(project.dbPasswordEncrypted),
+      ports: { kongHttp: project.kongHttpPort, kongHttps: project.kongHttpsPort, db: project.dbPort },
+      urls: { apiExternalUrl: apiUrl, siteUrl: apiUrl, supabasePublicUrl: apiUrl },
+      dataApiEnabled: project.dataApiEnabled,
+    });
+    const dir = writeStack(project.ref, { composeYaml, env });
+    await getComposeRunner().up(dir, name(project.ref));
+  }
+
   async pause(project: Project): Promise<void> {
     await getComposeRunner().stop(projectDir(project.ref), name(project.ref));
   }

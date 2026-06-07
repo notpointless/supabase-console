@@ -24,6 +24,8 @@ export interface Provisioner {
   pause(project: Project): Promise<void>;
   resume(project: Project): Promise<void>;
   delete(project: Project): Promise<void>;
+  // Re-apply stack config (e.g. Data API on/off) in place, preserving ports.
+  reconfigure?(project: Project): Promise<void>;
 }
 
 // Phase-2 stand-in for the real engine (Phase 3 replaces this).
