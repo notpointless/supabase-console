@@ -120,6 +120,29 @@ IP=$(curl -fsS http://169.254.169.254/latest/meta-data/public-ipv4 || echo local
   echo "SITE_URL=http://$IP:8000"
 } >> .env
 docker compose up -d
+
+# [console fork] A dedicated instance is the project's own box, so tune Postgres to
+# use its full RAM/CPU (the image ships conservative defaults: shared_buffers=128MB,
+# max_connections=100). Standard formulas (25%/75% RAM); applied via ALTER SYSTEM +
+# a db restart. Defensive (|| true) so tuning can never block provisioning.
+(
+  sleep 45
+  TOTAL_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+  CPUS=$(nproc)
+  SHARED_MB=$((TOTAL_MB / 4))
+  CACHE_MB=$((TOTAL_MB * 3 / 4))
+  MAINT_MB=$((TOTAL_MB / 16))
+  [ "$MAINT_MB" -gt 2048 ] && MAINT_MB=2048
+  docker exec supabase-db psql -U supabase_admin -d postgres -v ON_ERROR_STOP=0 -c "
+    ALTER SYSTEM SET shared_buffers='\${SHARED_MB}MB';
+    ALTER SYSTEM SET effective_cache_size='\${CACHE_MB}MB';
+    ALTER SYSTEM SET maintenance_work_mem='\${MAINT_MB}MB';
+    ALTER SYSTEM SET max_connections='200';
+    ALTER SYSTEM SET max_worker_processes='\${CPUS}';
+    ALTER SYSTEM SET max_parallel_workers='\${CPUS}';
+    ALTER SYSTEM SET max_parallel_workers_per_gather='\$(( (CPUS+1)/2 ))';
+  " && docker restart supabase-db
+) >/var/log/pg-tune.log 2>&1 || true
 `;
   return Buffer.from(script, "utf8").toString("base64");
 }
