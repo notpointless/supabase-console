@@ -75,6 +75,13 @@ export const auth = betterAuth({
           assertValidOrgFields(organization as { type?: unknown; dataPrivacyLevel?: unknown });
           return { data: organization };
         },
+        // Cascade: tearing down an org tears down ALL its projects' infrastructure
+        // (EC2 instances + shared-infra stacks) and removes their rows, so nothing
+        // is orphaned and the org row can be deleted without FK violations.
+        beforeDeleteOrganization: async ({ organization }: { organization: { id: string } }) => {
+          const { deleteAllProjectsForOrg } = await import("../projects/service.js");
+          await deleteAllProjectsForOrg(organization.id);
+        },
       },
       sendInvitationEmail: async (data) => {
         const base = env.APP_URL ?? env.BETTER_AUTH_URL;

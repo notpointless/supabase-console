@@ -1,4 +1,9 @@
-import { createAuthEndpoint, createAuthMiddleware, APIError } from "better-auth/api";
+import {
+  createAuthEndpoint,
+  createAuthMiddleware,
+  getSessionFromCtx,
+  APIError,
+} from "better-auth/api";
 import { setSessionCookie } from "better-auth/cookies";
 import { runWithTransaction, getCurrentAdapter } from "@better-auth/core/context";
 import type { BetterAuthPlugin } from "better-auth";
@@ -201,6 +206,31 @@ export const consolePlugin = () => {
           matcher: (ctx) => ctx.path === "/sign-up/email",
           handler: createAuthMiddleware(async () => {
             throw new APIError("FORBIDDEN", { message: "Signup is disabled" });
+          }),
+        },
+        {
+          // The only owner cannot leave an org — they'd orphan it. They must
+          // transfer ownership to another member first (or delete the org).
+          matcher: (ctx) => ctx.path === "/organization/leave",
+          handler: createAuthMiddleware(async (ctx) => {
+            const session = await getSessionFromCtx(ctx);
+            const userId = session?.user?.id;
+            const orgId =
+              (ctx.body as { organizationId?: string } | undefined)?.organizationId ??
+              (session?.session as { activeOrganizationId?: string } | undefined)
+                ?.activeOrganizationId;
+            if (!userId || !orgId) return;
+            const members = await ctx.context.adapter.findMany<{ userId: string; role: string }>({
+              model: "member",
+              where: [{ field: "organizationId", value: orgId }],
+            });
+            const owners = members.filter((m) => m.role === "owner");
+            if (owners.some((m) => m.userId === userId) && owners.length <= 1) {
+              throw new APIError("BAD_REQUEST", {
+                message:
+                  "You are the only owner of this organization. Transfer ownership to another member before leaving, or delete the organization instead.",
+              });
+            }
           }),
         },
         {
