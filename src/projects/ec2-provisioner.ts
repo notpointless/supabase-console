@@ -25,22 +25,24 @@ import { getCredentials } from "../aws/credentials-service";
 // Map the dashboard's compute tier -> a real EC2 instance type. The full supabase
 // stack needs ~4GB RAM, so the SMALLEST we ever launch is t3.medium (4GB) — tiers
 // below that (micro/small) are filtered out of the dedicated selector in the UI.
+// ARM/Graviton instances (t4g/m6g) — these match the dashboard's compute tier labels
+// and (real) pricing. The AMI is arm64 to match.
 const COMPUTE_SIZE_TO_INSTANCE_TYPE: Record<string, string> = {
-  micro: "t3.medium", // floor — should be filtered in the UI, but never launch <4GB
-  small: "t3.medium",
-  medium: "t3.medium", // 4 GB
-  large: "t3.large", // 8 GB
-  xlarge: "t3.xlarge", // 16 GB
-  "2xlarge": "t3.2xlarge", // 32 GB
-  "4xlarge": "m5.4xlarge", // 64 GB
-  "8xlarge": "m5.8xlarge", // 128 GB
-  "12xlarge": "m5.12xlarge", // 192 GB
-  "16xlarge": "m5.16xlarge", // 256 GB
+  micro: "t4g.medium", // floor — should be filtered in the UI, but never launch <4GB
+  small: "t4g.medium",
+  medium: "t4g.medium", // 4 GB
+  large: "m6g.large", // 8 GB
+  xlarge: "m6g.xlarge", // 16 GB
+  "2xlarge": "m6g.2xlarge", // 32 GB
+  "4xlarge": "m6g.4xlarge", // 64 GB
+  "8xlarge": "m6g.8xlarge", // 128 GB
+  "12xlarge": "m6g.12xlarge", // 192 GB
+  "16xlarge": "m6g.16xlarge", // 256 GB
 };
 // EC2_INSTANCE_TYPE overrides everything (testing). Otherwise default to medium (4GB).
 function instanceTypeFor(computeSize: string | null | undefined): string {
   if (process.env.EC2_INSTANCE_TYPE) return process.env.EC2_INSTANCE_TYPE;
-  return COMPUTE_SIZE_TO_INSTANCE_TYPE[computeSize ?? "medium"] ?? "t3.medium";
+  return COMPUTE_SIZE_TO_INSTANCE_TYPE[computeSize ?? "medium"] ?? "t4g.medium";
 }
 const SG_NAME = "supabase-console-dedicated";
 // [console fork] The self-host stack only works with OUR fork of supabase, not
@@ -57,15 +59,16 @@ function clientFor(region: string, creds: { accessKeyId: string; secretAccessKey
   });
 }
 
-/** Latest Amazon Linux 2023 x86_64 AMI in the target region. */
+/** Latest Amazon Linux 2023 arm64 AMI in the target region (we launch ARM/Graviton
+ *  instances — t4g/m6g — which the dashboard's compute tiers + pricing reflect). */
 async function latestAl2023Ami(ec2: EC2Client): Promise<string> {
   const out = await ec2.send(
     new DescribeImagesCommand({
       Owners: ["amazon"],
       Filters: [
-        { Name: "name", Values: ["al2023-ami-2023.*-x86_64"] },
+        { Name: "name", Values: ["al2023-ami-2023.*-arm64"] },
         { Name: "state", Values: ["available"] },
-        { Name: "architecture", Values: ["x86_64"] },
+        { Name: "architecture", Values: ["arm64"] },
       ],
     })
   );
@@ -144,7 +147,7 @@ SUPABASE_FORK_BRANCH="${SUPABASE_FORK_BRANCH}"
 dnf install -y docker git || yum install -y docker git
 systemctl enable --now docker
 mkdir -p /usr/local/lib/docker/cli-plugins
-curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64 \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 # [console fork] Use OUR fork of supabase (notpointless/supabase) — the self-host
