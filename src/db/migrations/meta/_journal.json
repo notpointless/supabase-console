@@ -120,6 +120,13 @@
       "when": 1780860140854,
       "tag": "0016_github_oauth_integration",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1780860657753,
+      "tag": "0017_org_github_app",
+      "breakpoints": true
     }
   ]
 }

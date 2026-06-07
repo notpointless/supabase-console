@@ -9,6 +9,7 @@ import {
   orgVercelConnection,
   projectRepoConnection,
   projectPrivatelinkAccount,
+  orgGithubAppConfig,
   githubAuthorization,
   githubConnection,
 } from "../db/schema";
@@ -21,7 +22,6 @@ import {
   listRepositories,
   getRepoById,
   checkBranch,
-  githubAppConfigured,
 } from "./github-oauth";
 import { getProjectByRef } from "../projects/service";
 import { getQueue } from "../jobs/queue";
@@ -487,78 +487,106 @@ integrations.post("/api/v1/github/webhook", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// GitHub App OAuth integration ("Connect GitHub" in the dashboard). The browser
-// authorizes the App in a popup; GitHub redirects back with a `code`, which we
-// exchange for a user-access token, then list the App's repos and let the user
-// link one to a project. Created connections are mirrored into
-// org_github_connection + project_repo_connection so the deploy/webhook/branch
-// pipeline works with them unchanged.
+
 // ---------------------------------------------------------------------------
-async function currentUserGithubToken(
-  userId: string
-): Promise<{ token: string; login: string; githubUserId: number } | null> {
-  const [a] = await db.select().from(githubAuthorization).where(eq(githubAuthorization.userId, userId));
+// GitHub App OAuth integration (ORG-LEVEL). Each organization registers its OWN
+// GitHub App (name + client id + secret); the connect flow + token exchange use
+// that org's App. Authorizations are (user, org)-scoped. Created connections are
+// mirrored into org_github_connection + project_repo_connection so the deploy /
+// webhook / branch-sync pipeline works with them unchanged.
+// ---------------------------------------------------------------------------
+async function orgGithubAppCreds(orgId: string): Promise<{ appName: string; clientId: string; clientSecret: string } | null> {
+  const [cfg] = await db.select().from(orgGithubAppConfig).where(eq(orgGithubAppConfig.organizationId, orgId));
+  if (!cfg) return null;
+  return { appName: cfg.appName, clientId: cfg.clientId, clientSecret: decrypt(cfg.clientSecretEncrypted) };
+}
+
+async function userOrgGithubToken(userId: string, orgId: string): Promise<{ token: string; login: string; githubUserId: number } | null> {
+  const [a] = await db.select().from(githubAuthorization).where(and(eq(githubAuthorization.userId, userId), eq(githubAuthorization.organizationId, orgId)));
   if (!a) return null;
   return { token: decrypt(a.accessTokenEncrypted), login: a.githubLogin, githubUserId: a.githubUserId };
 }
 
-integrations.get("/api/v1/integrations/github/authorization", async (c) => {
+const githubAppConfigSchema = z.object({ appName: z.string().min(1), clientId: z.string().min(1), clientSecret: z.string().min(1) });
+
+integrations.get("/api/v1/organizations/:orgId/github-app", async (c) => {
+  await requireSession(c);
+  const orgId = c.req.param("orgId");
+  await requirePermission(c, orgId, MEMBER);
+  const [cfg] = await db.select().from(orgGithubAppConfig).where(eq(orgGithubAppConfig.organizationId, orgId));
+  return c.json(cfg ? { configured: true, app_name: cfg.appName, client_id: cfg.clientId } : { configured: false });
+});
+
+integrations.put("/api/v1/organizations/:orgId/github-app", async (c) => {
+  await requireSession(c);
+  const orgId = c.req.param("orgId");
+  await requirePermission(c, orgId, OWNER_ADMIN);
+  const parsed = githubAppConfigSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) throw new AppError(400, "validation_error", "Invalid GitHub App config", parsed.error.flatten());
+  await db.insert(orgGithubAppConfig).values({
+    organizationId: orgId, appName: parsed.data.appName, clientId: parsed.data.clientId, clientSecretEncrypted: encrypt(parsed.data.clientSecret),
+  }).onConflictDoUpdate({ target: orgGithubAppConfig.organizationId, set: { appName: parsed.data.appName, clientId: parsed.data.clientId, clientSecretEncrypted: encrypt(parsed.data.clientSecret), updatedAt: new Date() } });
+  return c.json({ configured: true, app_name: parsed.data.appName, client_id: parsed.data.clientId });
+});
+
+integrations.delete("/api/v1/organizations/:orgId/github-app", async (c) => {
+  await requireSession(c);
+  const orgId = c.req.param("orgId");
+  await requirePermission(c, orgId, OWNER_ADMIN);
+  await db.delete(orgGithubAppConfig).where(eq(orgGithubAppConfig.organizationId, orgId));
+  await db.delete(githubAuthorization).where(eq(githubAuthorization.organizationId, orgId));
+  return c.json({ configured: false });
+});
+
+integrations.get("/api/v1/organizations/:orgId/github/authorization", async (c) => {
   const session = await requireSession(c);
-  const [a] = await db.select().from(githubAuthorization).where(eq(githubAuthorization.userId, session.user.id));
+  const orgId = c.req.param("orgId");
+  await requirePermission(c, orgId, MEMBER);
+  const [a] = await db.select().from(githubAuthorization).where(and(eq(githubAuthorization.userId, session.user.id), eq(githubAuthorization.organizationId, orgId)));
   if (!a) return c.json(null);
   return c.json({ id: a.githubUserId, sender_id: a.githubUserId, user_id: a.githubUserId });
 });
 
-integrations.post("/api/v1/integrations/github/authorization", async (c) => {
+integrations.post("/api/v1/organizations/:orgId/github/authorization", async (c) => {
   const session = await requireSession(c);
-  if (!githubAppConfigured()) {
-    throw new AppError(400, "github_not_configured", "GitHub App is not configured on this server.");
-  }
+  const orgId = c.req.param("orgId");
+  await requirePermission(c, orgId, MEMBER);
+  const app = await orgGithubAppCreds(orgId);
+  if (!app) throw new AppError(400, "github_not_configured", "This organization has no GitHub App configured.");
   const body = (await c.req.json().catch(() => ({}))) as { code?: string };
   const code = String(body?.code ?? "");
   if (!code) throw new AppError(400, "validation_error", "code is required");
-  const token = await exchangeCode(code);
+  const token = await exchangeCode(app.clientId, app.clientSecret, code);
   const ghUser = await getGithubUser(token);
-  await db
-    .insert(githubAuthorization)
-    .values({
-      userId: session.user.id,
-      githubUserId: ghUser.id,
-      githubLogin: ghUser.login,
-      accessTokenEncrypted: encrypt(token),
-    })
-    .onConflictDoUpdate({
-      target: githubAuthorization.userId,
-      set: { githubUserId: ghUser.id, githubLogin: ghUser.login, accessTokenEncrypted: encrypt(token), updatedAt: new Date() },
-    });
+  await db.insert(githubAuthorization).values({
+    userId: session.user.id, organizationId: orgId, githubUserId: ghUser.id, githubLogin: ghUser.login, accessTokenEncrypted: encrypt(token),
+  }).onConflictDoUpdate({ target: [githubAuthorization.userId, githubAuthorization.organizationId], set: { githubUserId: ghUser.id, githubLogin: ghUser.login, accessTokenEncrypted: encrypt(token), updatedAt: new Date() } });
   return c.json({ id: ghUser.id, sender_id: ghUser.id, user_id: ghUser.id }, 201);
 });
 
-integrations.delete("/api/v1/integrations/github/authorization", async (c) => {
+integrations.delete("/api/v1/organizations/:orgId/github/authorization", async (c) => {
   const session = await requireSession(c);
-  await db.delete(githubAuthorization).where(eq(githubAuthorization.userId, session.user.id));
+  const orgId = c.req.param("orgId");
+  await requirePermission(c, orgId, MEMBER);
+  await db.delete(githubAuthorization).where(and(eq(githubAuthorization.userId, session.user.id), eq(githubAuthorization.organizationId, orgId)));
   return c.json({ ok: true });
 });
 
-integrations.get("/api/v1/integrations/github/repositories", async (c) => {
+integrations.get("/api/v1/organizations/:orgId/github/repositories", async (c) => {
   const session = await requireSession(c);
-  const auth = await currentUserGithubToken(session.user.id);
-  if (!auth) throw new AppError(400, "github_not_authorized", "GitHub is not connected");
+  const orgId = c.req.param("orgId");
+  await requirePermission(c, orgId, MEMBER);
+  const auth = await userOrgGithubToken(session.user.id, orgId);
+  if (!auth) throw new AppError(400, "github_not_authorized", "GitHub is not connected for this organization");
   const repos = await listRepositories(auth.token);
-  return c.json({
-    partial_response_due_to_sso: false,
-    repositories: repos.map((r) => ({
-      id: r.id,
-      name: r.name,
-      installation_id: r.installation_id,
-      default_branch: r.default_branch,
-    })),
-  });
+  return c.json({ partial_response_due_to_sso: false, repositories: repos.map((r) => ({ id: r.id, name: r.name, installation_id: r.installation_id, default_branch: r.default_branch })) });
 });
 
-integrations.get("/api/v1/integrations/github/repositories/:repoId/branches/:branch", async (c) => {
+integrations.get("/api/v1/organizations/:orgId/github/repositories/:repoId/branches/:branch", async (c) => {
   const session = await requireSession(c);
-  const auth = await currentUserGithubToken(session.user.id);
+  const orgId = c.req.param("orgId");
+  await requirePermission(c, orgId, MEMBER);
+  const auth = await userOrgGithubToken(session.user.id, orgId);
   if (!auth) throw new AppError(400, "github_not_authorized", "GitHub is not connected");
   const repo = await getRepoById(auth.token, Number(c.req.param("repoId")));
   if (!repo) throw new AppError(404, "repo_not_found", "Repository not found");
@@ -567,21 +595,12 @@ integrations.get("/api/v1/integrations/github/repositories/:repoId/branches/:bra
   return c.json({ name });
 });
 
-async function mapGithubConnection(
-  row: typeof githubConnection.$inferSelect,
-  login?: string,
-  ghUserId?: number
-) {
+async function mapGithubConnection(row: typeof githubConnection.$inferSelect, login?: string, ghUserId?: number) {
   const [proj] = await db.select().from(project).where(eq(project.id, row.projectId));
   return {
-    id: row.id,
-    inserted_at: row.createdAt.toISOString(),
-    updated_at: row.updatedAt.toISOString(),
-    installation_id: row.installationId,
-    branch_limit: row.branchLimit,
-    new_branch_per_pr: row.newBranchPerPr,
-    supabase_changes_only: row.supabaseChangesOnly,
-    workdir: row.workdir,
+    id: row.id, inserted_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString(),
+    installation_id: row.installationId, branch_limit: row.branchLimit, new_branch_per_pr: row.newBranchPerPr,
+    supabase_changes_only: row.supabaseChangesOnly, workdir: row.workdir,
     project: { id: 0, name: proj?.name ?? "", ref: proj?.ref ?? "" },
     repository: { id: row.repositoryId, name: row.repositoryName },
     user: login ? { id: ghUserId ?? 0, primary_email: null, username: login } : null,
@@ -594,19 +613,15 @@ integrations.get("/api/v1/integrations/github/connections", async (c) => {
   if (!orgId) throw new AppError(400, "validation_error", "organization_id is required");
   await requirePermission(c, orgId, MEMBER);
   const rows = await db.select().from(githubConnection).where(eq(githubConnection.organizationId, orgId));
-  const auth = await currentUserGithubToken(session.user.id);
+  const auth = await userOrgGithubToken(session.user.id, orgId);
   const connections = await Promise.all(rows.map((r) => mapGithubConnection(r, auth?.login, auth?.githubUserId)));
   return c.json({ connections });
 });
 
 const createConnSchema = z.object({
-  installation_id: z.number(),
-  project_ref: z.string(),
-  repository_id: z.number(),
-  workdir: z.string().optional(),
-  new_branch_per_pr: z.boolean().optional(),
-  supabase_changes_only: z.boolean().optional(),
-  branch_limit: z.number().optional(),
+  installation_id: z.number(), project_ref: z.string(), repository_id: z.number(),
+  workdir: z.string().optional(), new_branch_per_pr: z.boolean().optional(),
+  supabase_changes_only: z.boolean().optional(), branch_limit: z.number().optional(),
 });
 
 integrations.post("/api/v1/integrations/github/connections", async (c) => {
@@ -616,62 +631,23 @@ integrations.post("/api/v1/integrations/github/connections", async (c) => {
   const proj = await getProjectByRef(parsed.data.project_ref);
   if (!proj) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, proj.organizationId, PROJECT_UPDATE);
-  const auth = await currentUserGithubToken(session.user.id);
-  if (!auth) throw new AppError(400, "github_not_authorized", "GitHub is not connected");
+  const auth = await userOrgGithubToken(session.user.id, proj.organizationId);
+  if (!auth) throw new AppError(400, "github_not_authorized", "GitHub is not connected for this organization");
   const repo = await getRepoById(auth.token, parsed.data.repository_id);
   if (!repo) throw new AppError(404, "repo_not_found", "Repository not found");
   const branch = repo.default_branch;
-
-  const [row] = await db
-    .insert(githubConnection)
-    .values({
-      organizationId: proj.organizationId,
-      projectId: proj.id,
-      installationId: parsed.data.installation_id,
-      repositoryId: repo.id,
-      repositoryName: repo.full_name,
-      branch,
-      workdir: parsed.data.workdir ?? ".",
-      newBranchPerPr: parsed.data.new_branch_per_pr ?? true,
-      supabaseChangesOnly: parsed.data.supabase_changes_only ?? true,
-      branchLimit: parsed.data.branch_limit ?? 3,
-      createdBy: session.user.id,
-    })
-    .onConflictDoUpdate({
-      target: githubConnection.projectId,
-      set: { installationId: parsed.data.installation_id, repositoryId: repo.id, repositoryName: repo.full_name, branch, updatedAt: new Date() },
-    })
-    .returning();
-
-  // Mirror into the deploy pipeline's stores so push/PR/merge/deploy work.
-  await db
-    .insert(orgGithubConnection)
-    .values({
-      organizationId: proj.organizationId,
-      githubLogin: auth.login,
-      accessTokenEncrypted: encrypt(auth.token),
-      installationId: String(parsed.data.installation_id),
-    })
-    .onConflictDoUpdate({
-      target: orgGithubConnection.organizationId,
-      set: { githubLogin: auth.login, accessTokenEncrypted: encrypt(auth.token), installationId: String(parsed.data.installation_id) },
-    });
+  const [row] = await db.insert(githubConnection).values({
+    organizationId: proj.organizationId, projectId: proj.id, installationId: parsed.data.installation_id,
+    repositoryId: repo.id, repositoryName: repo.full_name, branch, workdir: parsed.data.workdir ?? ".",
+    newBranchPerPr: parsed.data.new_branch_per_pr ?? true, supabaseChangesOnly: parsed.data.supabase_changes_only ?? true,
+    branchLimit: parsed.data.branch_limit ?? 3, createdBy: session.user.id,
+  }).onConflictDoUpdate({ target: githubConnection.projectId, set: { installationId: parsed.data.installation_id, repositoryId: repo.id, repositoryName: repo.full_name, branch, updatedAt: new Date() } }).returning();
+  await db.insert(orgGithubConnection).values({
+    organizationId: proj.organizationId, githubLogin: auth.login, accessTokenEncrypted: encrypt(auth.token), installationId: String(parsed.data.installation_id),
+  }).onConflictDoUpdate({ target: orgGithubConnection.organizationId, set: { githubLogin: auth.login, accessTokenEncrypted: encrypt(auth.token), installationId: String(parsed.data.installation_id) } });
   await db.delete(projectRepoConnection).where(eq(projectRepoConnection.projectId, proj.id));
   await db.insert(projectRepoConnection).values({ projectId: proj.id, repoFullName: repo.full_name, branch });
-
-  return c.json(
-    {
-      id: row!.id,
-      inserted_at: row!.createdAt.toISOString(),
-      updated_at: row!.updatedAt.toISOString(),
-      installation_id: row!.installationId,
-      branch_limit: row!.branchLimit,
-      new_branch_per_pr: row!.newBranchPerPr,
-      supabase_changes_only: row!.supabaseChangesOnly,
-      workdir: row!.workdir,
-    },
-    201
-  );
+  return c.json({ id: row!.id, inserted_at: row!.createdAt.toISOString(), updated_at: row!.updatedAt.toISOString(), installation_id: row!.installationId, branch_limit: row!.branchLimit, new_branch_per_pr: row!.newBranchPerPr, supabase_changes_only: row!.supabaseChangesOnly, workdir: row!.workdir }, 201);
 });
 
 integrations.patch("/api/v1/integrations/github/connections/:id", async (c) => {

@@ -86,17 +86,30 @@ export const orgGithubConnection = pgTable("org_github_connection", {
   installationId: text("installation_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
-// A user's GitHub App OAuth authorization (the user-access token + identity). One
-// row per user; powers the dashboard's "Connect GitHub" state + repo listing.
+// Per-org GitHub App credentials. Each organization registers its OWN GitHub App
+// (name + client id + secret); the connect flow + token exchange use the org's App.
+export const orgGithubAppConfig = pgTable("org_github_app_config", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: text("organization_id").notNull().unique().references(() => organization.id, { onDelete: "cascade" }),
+  appName: text("app_name").notNull(), // the App slug (used in the install URL)
+  clientId: text("client_id").notNull(),
+  clientSecretEncrypted: text("client_secret_encrypted").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// A user's GitHub App OAuth authorization (user-access token + identity), scoped to
+// the org whose App they authorized. Powers the "Connect GitHub" state + repo listing.
 export const githubAuthorization = pgTable("github_authorization", {
   id: uuid("id").defaultRandom().primaryKey(),
-  userId: text("user_id").notNull().unique().references(() => user.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
   githubUserId: integer("github_user_id").notNull(),
   githubLogin: text("github_login").notNull(),
   accessTokenEncrypted: text("access_token_encrypted").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [unique("github_authorization_user_org_uniq").on(t.userId, t.organizationId)]);
 
 // A GitHub repo <-> project connection created via the dashboard integration UI.
 // Mirrors what Supabase's platform stores; kept in sync with project_repo_connection
@@ -173,6 +186,7 @@ export type OrgAwsCredentials = typeof orgAwsCredentials.$inferSelect;
 export type ProjectSecrets = typeof projectSecrets.$inferSelect;
 export type OrgOauthApp = typeof orgOauthApp.$inferSelect;
 export type OrgGithubConnection = typeof orgGithubConnection.$inferSelect;
+export type OrgGithubAppConfig = typeof orgGithubAppConfig.$inferSelect;
 export type GithubAuthorization = typeof githubAuthorization.$inferSelect;
 export type GithubConnection = typeof githubConnection.$inferSelect;
 export type OrgVercelConnection = typeof orgVercelConnection.$inferSelect;

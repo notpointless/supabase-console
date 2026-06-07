@@ -8,28 +8,12 @@ import { AppError } from "../http/error";
 // for a user-access token, then list the App's installed repositories. The same
 // user token is used to read `supabase/migrations` for deploys.
 //
-// Requires GITHUB_INTEGRATION_CLIENT_ID + GITHUB_INTEGRATION_CLIENT_SECRET (the
-// GitHub App's credentials). Without them, the integration is unconfigured.
+// Credentials are PER-ORG: each organization registers its own GitHub App (name +
+// client id + secret), stored in org_github_app_config. The code exchange uses that
+// org's clientId + clientSecret.
 // ---------------------------------------------------------------------------
 
 const GITHUB_API = "https://api.github.com";
-
-export function githubAppConfigured(): boolean {
-  return !!(process.env.GITHUB_INTEGRATION_CLIENT_ID && process.env.GITHUB_INTEGRATION_CLIENT_SECRET);
-}
-
-function requireConfig(): { clientId: string; clientSecret: string } {
-  const clientId = process.env.GITHUB_INTEGRATION_CLIENT_ID;
-  const clientSecret = process.env.GITHUB_INTEGRATION_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    throw new AppError(
-      400,
-      "github_not_configured",
-      "GitHub App is not configured. Set GITHUB_INTEGRATION_CLIENT_ID and GITHUB_INTEGRATION_CLIENT_SECRET."
-    );
-  }
-  return { clientId, clientSecret };
-}
 
 function apiHeaders(token: string): Record<string, string> {
   return {
@@ -40,9 +24,8 @@ function apiHeaders(token: string): Record<string, string> {
   };
 }
 
-/** Exchange an OAuth `code` for a user-access token. */
-export async function exchangeCode(code: string): Promise<string> {
-  const { clientId, clientSecret } = requireConfig();
+/** Exchange an OAuth `code` for a user-access token using an org's App credentials. */
+export async function exchangeCode(clientId: string, clientSecret: string, code: string): Promise<string> {
   const res = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json", "User-Agent": "supabase-console" },
