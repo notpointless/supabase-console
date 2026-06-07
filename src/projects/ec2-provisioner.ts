@@ -12,6 +12,7 @@ import {
   DescribeSecurityGroupsCommand,
   DescribeVpcsCommand,
   CreateDefaultVpcCommand,
+  ModifyInstanceAttributeCommand,
 } from "@aws-sdk/client-ec2";
 
 import type { Provisioner, ProvisionResult, Connection } from "./provisioner";
@@ -297,6 +298,41 @@ export class Ec2Provisioner implements Provisioner {
     const creds = await getCredentials(project.organizationId);
     const ec2 = clientFor(project.region, creds);
     await ec2.send(new RebootInstancesCommand({ InstanceIds: [instanceIdOf(project)] }));
+  }
+
+  // Change compute: stop -> change instance type (requires stopped) -> start. The
+  // public host changes on stop/start, so return the fresh connection to persist.
+  async resize(project: Project): Promise<Connection> {
+    const creds = await getCredentials(project.organizationId);
+    const ec2 = clientFor(project.region, creds);
+    const instanceId = instanceIdOf(project);
+    const instanceType = instanceTypeFor(project.computeSize);
+    await ec2.send(new StopInstancesCommand({ InstanceIds: [instanceId] }));
+    await this.waitForState(ec2, instanceId, "stopped");
+    await ec2.send(
+      new ModifyInstanceAttributeCommand({ InstanceId: instanceId, InstanceType: { Value: instanceType } })
+    );
+    await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
+    const host = await this.waitForPublicHost(ec2, instanceId);
+    return {
+      host,
+      apiUrl: `http://${host}:8000`,
+      kongHttpPort: 8000,
+      kongHttpsPort: 8443,
+      dbPort: 5432,
+      ref: project.ref,
+      instanceId,
+      region: project.region,
+    } as Connection & { instanceId: string; region: string };
+  }
+
+  private async waitForState(ec2: EC2Client, instanceId: string, state: string): Promise<void> {
+    for (let i = 0; i < 60; i++) {
+      const out = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
+      if (out.Reservations?.[0]?.Instances?.[0]?.State?.Name === state) return;
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+    throw new Error(`EC2 instance ${instanceId} did not reach ${state} in time`);
   }
 
   async delete(project: Project): Promise<void> {

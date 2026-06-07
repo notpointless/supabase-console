@@ -75,6 +75,17 @@ export const taskList = {
     await getProvisionerFor(row).restart?.(row, services);
     await db.update(project).set({ updatedAt: new Date() }).where(eq(project.ref, ref));
   },
+  resize_compute: async (payload: unknown): Promise<void> => {
+    // Resize the dedicated instance to the project's current computeSize. The public
+    // host changes on stop/start, so persist the returned connection.
+    const { ref } = payload as { ref: string };
+    const row = await loadByRef(ref);
+    if (!row) return;
+    const conn = await getProvisionerFor(row).resize?.(row);
+    if (conn) {
+      await db.update(project).set({ connection: conn, updatedAt: new Date() }).where(eq(project.ref, ref));
+    }
+  },
   delete: async (payload: unknown): Promise<void> => {
     const { ref } = payload as { ref: string };
     const row = await loadByRef(ref);

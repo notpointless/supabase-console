@@ -16,6 +16,7 @@ import {
   pauseProject,
   resumeProject,
   restartProject,
+  resizeProject,
   deleteProject,
 } from "./service";
 import { getProjectSecrets, derivePublishableKey, deriveSecretKey, deriveSigningKeys } from "./secrets";
@@ -144,6 +145,30 @@ projects.post("/api/v1/projects/:ref/resume", async (c) => {
   await requirePermission(c, row.organizationId, { project: ["update"] });
   await resumeProject(ref);
   return c.json(publicProject((await getProjectByRef(ref))!));
+});
+
+// Change a dedicated project's compute size. The dashboard sends this as a billing
+// "compute_instance" addon (ci_<size>); we map it to an instance resize. GET returns
+// the available tiers + current so the compute-and-disk page can render.
+projects.get("/api/v1/projects/:ref/billing/addons", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  return c.json({ selected_addons: [], available_addons: [], compute_size: row.computeSize });
+});
+
+projects.post("/api/v1/projects/:ref/billing/addons", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const body = (await c.req.json().catch(() => ({}))) as { addon_type?: string; addon_variant?: string };
+  if (body.addon_type === "compute_instance" && body.addon_variant) {
+    await resizeProject(ref, body.addon_variant.replace(/^ci_/, "")); // ci_large -> large
+  }
+  return c.json({ ok: true });
 });
 
 // Restart the whole project stack.

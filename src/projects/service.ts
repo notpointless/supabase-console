@@ -113,6 +113,18 @@ const SERVICE_NAME_MAP: Record<string, string> = {
   kong: "kong",
 };
 
+// Change a dedicated project's compute size (resize its instance). Floors at medium.
+export async function resizeProject(ref: string, computeSize: string): Promise<void> {
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  if (row.infrastructureType === "shared") {
+    throw new AppError(400, "not_dedicated", "Compute size only applies to dedicated projects");
+  }
+  const size = MIN_DEDICATED_COMPUTE.has(computeSize) ? computeSize : "medium";
+  await db.update(project).set({ computeSize: size, updatedAt: new Date() }).where(eq(project.ref, ref));
+  await getQueue().enqueue("resize_compute", { ref });
+}
+
 export async function restartProject(ref: string, services?: string[]): Promise<void> {
   const mapped = (services ?? [])
     .map((s) => SERVICE_NAME_MAP[s.toLowerCase()] ?? s)

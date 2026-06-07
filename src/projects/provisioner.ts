@@ -29,6 +29,9 @@ export interface Provisioner {
   // Restart the project's services. `services` (mapped compose service names) is a
   // best-effort hint; infra that can only restart the whole stack/instance ignores it.
   restart?(project: Project, services?: string[]): Promise<void>;
+  // Change the project's compute (dedicated only): stop, switch to the instance type
+  // for project.computeSize, start. Returns the (new) connection to persist.
+  resize?(project: Project): Promise<Connection>;
 }
 
 // Phase-2 stand-in for the real engine (Phase 3 replaces this).
