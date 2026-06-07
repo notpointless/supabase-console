@@ -1,0 +1,5 @@
+# Vendored container scripts/configs must use LF so Linux containers can exec
+# them regardless of the OS the repo is checked out on (Windows autocrlf would
+# otherwise break shebang scripts like kong-entrypoint.sh).
+src/projects/stack/volumes/** text eol=lf
+*.sh text eol=lf
