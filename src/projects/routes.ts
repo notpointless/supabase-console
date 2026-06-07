@@ -19,9 +19,9 @@ import {
 } from "./service";
 import { getProjectSecrets } from "./secrets";
 import type { Project } from "../db/schema";
-import { project } from "../db/schema";
+import { project, organization, member } from "../db/schema";
 import { db } from "../db/client";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { getProvisionerFor } from "./provisioner";
 import { assertMfaCompliant } from "../auth/mfa";
 
@@ -158,6 +158,90 @@ projects.patch("/api/v1/projects/:ref/data-api", async (c) => {
     /* best-effort; flag is persisted regardless */
   }
   return c.json(publicProject(updated));
+});
+
+// ---------------------------------------------------------------------------
+// Project transfer (move a project to another organization).
+// Shared-infra projects can be transferred freely (stack runs on our control
+// plane). Dedicated (EC2) projects CANNOT — the instance lives in the source
+// org's AWS account, so transferring would orphan it.
+// ---------------------------------------------------------------------------
+async function resolveTargetOrg(slug: string | undefined) {
+  if (!slug) return undefined;
+  const [org] = await db.select().from(organization).where(eq(organization.slug, slug));
+  return org;
+}
+
+projects.post("/api/v1/projects/:ref/transfer/preview", async (c) => {
+  const session = await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, OWNER_ADMIN);
+
+  const body = await c.req.json().catch(() => ({}) as any);
+  const target = await resolveTargetOrg(body?.target_organization_slug);
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (!body?.target_organization_slug) errors.push("Target organization is required.");
+  else if (!target) errors.push("Target organization not found.");
+
+  if (row.infrastructureType !== "shared") {
+    errors.push(
+      "Dedicated (AWS/EC2) projects can't be transferred between organizations — the instance is tied to the source organization's AWS account."
+    );
+  }
+
+  if (target) {
+    const [m] = await db
+      .select()
+      .from(member)
+      .where(and(eq(member.organizationId, target.id), eq(member.userId, session.user.id)));
+    if (!m) errors.push("You must be a member of the target organization.");
+    else if (m.role !== "owner" && m.role !== "admin")
+      warnings.push("Your permissions in the target organization may differ after transfer.");
+  }
+
+  return c.json({
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    members_exceeding_free_project_limit: [],
+    target_organization_eligible: !!target,
+    source_subscription_plan: "free",
+    target_subscription_plan: "free",
+  });
+});
+
+projects.post("/api/v1/projects/:ref/transfer", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, OWNER_ADMIN);
+
+  if (row.infrastructureType !== "shared") {
+    throw new AppError(
+      400,
+      "transfer_not_allowed",
+      "Dedicated (AWS/EC2) projects can't be transferred between organizations."
+    );
+  }
+
+  const body = await c.req.json().catch(() => ({}) as any);
+  if (!body?.target_organization_slug)
+    throw new AppError(400, "validation_error", "target_organization_slug is required");
+  const target = await resolveTargetOrg(body.target_organization_slug);
+  if (!target) throw new AppError(404, "org_not_found", "Target organization not found");
+  // Caller must also be an owner/admin of the destination org.
+  await requirePermission(c, target.id, OWNER_ADMIN);
+
+  await db
+    .update(project)
+    .set({ organizationId: target.id, updatedAt: new Date() })
+    .where(eq(project.ref, ref));
+  return c.json(publicProject((await getProjectByRef(ref))!));
 });
 
 projects.delete("/api/v1/projects/:ref", async (c) => {
