@@ -301,6 +301,10 @@ export class Ec2Provisioner implements Provisioner {
     // to terminate it. Terminate here so a failed provision never leaves an orphan.
     try {
       const host = await this.waitForPublicHost(ec2, instanceId);
+      // Don't return (and let the project flip to "active") until the data plane (kong)
+      // actually responds — otherwise the dashboard lets the user in while the stack is
+      // still pulling images and every data-plane call errors.
+      await this.waitForStack(host);
       const apiUrl = `http://${host}:8000`;
       return {
         connection: {
@@ -353,6 +357,22 @@ export class Ec2Provisioner implements Provisioner {
       await new Promise((r) => setTimeout(r, 5000));
     }
     throw new Error(`EC2 instance ${instanceId} did not become reachable in time`);
+  }
+
+  // Poll kong (the data plane) until it responds, so the project isn't marked active
+  // until it's actually usable. Best-effort: after ~15 min we give up waiting and let
+  // the project go active anyway (the stack is likely just slow, not broken).
+  private async waitForStack(host: string): Promise<void> {
+    for (let i = 0; i < 180; i++) {
+      try {
+        const res = await fetch(`http://${host}:8000/`, { signal: AbortSignal.timeout(5000) });
+        // Any HTTP response means kong is up (401 without an apikey is expected).
+        if (res.status > 0) return;
+      } catch {
+        // connection refused / timeout — stack still coming up
+      }
+      await new Promise((r) => setTimeout(r, 5000));
+    }
   }
 
   async pause(project: Project): Promise<void> {
