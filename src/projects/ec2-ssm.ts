@@ -96,9 +96,10 @@ export async function runCommand(ssm: SSMClient, instanceId: string, command: st
   );
   const commandId = sent.Command?.CommandId;
   if (!commandId) throw new Error("SSM SendCommand returned no command id");
-  // Poll for completion (up to ~60s).
-  for (let i = 0; i < 30; i++) {
-    await new Promise((r) => setTimeout(r, 2000));
+  // Poll for completion (up to ~60s). Most commands (psql, file writes) finish in well
+  // under a second, so poll quickly first and back off, to keep interactive ops snappy.
+  for (let i = 0; i < 120; i++) {
+    await new Promise((r) => setTimeout(r, i < 10 ? 400 : 1000));
     try {
       const inv = await ssm.send(
         new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId })
