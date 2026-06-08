@@ -26,8 +26,8 @@ cp .env.example .env          # fill in the values
 pointless run migrate
 pointless dev                 # backend on :3000
 
-# 2. Dashboard (the forked Studio)
-git clone https://github.com/notpointless/supabase.git
+# 2. Dashboard (the forked Studio — the console-fork branch)
+git clone -b chore/console-fork https://github.com/notpointless/supabase.git
 cd supabase/apps/studio && pnpm install
 # set apps/studio/.env.local: CONSOLE_API_URL=http://localhost:3000, NEXT_PUBLIC_IS_PLATFORM=true
 pnpm dev                      # dashboard on :8082
