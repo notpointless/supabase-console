@@ -31,6 +31,13 @@ import { getProvisionerFor } from "./provisioner";
 import { listBackups, createBackup, backupFilePath, restoreBackup } from "./backups";
 import { listFunctionSecrets, setFunctionSecrets, deleteFunctionSecrets } from "./function-secrets";
 import { getRealtimeConfig, updateRealtimeConfig } from "./realtime-config";
+import {
+  getCustomHostname,
+  initializeCustomHostname,
+  reverifyCustomHostname,
+  activateCustomHostname,
+  deleteCustomHostname,
+} from "./custom-hostname";
 import { readFileSync } from "node:fs";
 import { listBranches, createBranch, getBranchById, deleteBranch, resetBranch, mapBranch, branchSchemaDiff } from "./branches";
 import { mergeBranchToProduction } from "../integrations/github-deploy";
@@ -150,6 +157,53 @@ projects.post("/api/v1/projects/:ref/resume", async (c) => {
   return c.json(publicProject((await getProjectByRef(ref))!));
 });
 
+// Custom hostname (dedicated/EC2 only) — matches the Supabase custom-domains UI.
+projects.get("/api/v1/projects/:ref/custom-hostname", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  return c.json(await getCustomHostname(row));
+});
+
+projects.post("/api/v1/projects/:ref/custom-hostname/initialize", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const body = z.object({ custom_hostname: z.string().min(1) }).parse(await c.req.json());
+  return c.json(await initializeCustomHostname(row, body.custom_hostname));
+});
+
+projects.post("/api/v1/projects/:ref/custom-hostname/reverify", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  return c.json(await reverifyCustomHostname(row));
+});
+
+projects.post("/api/v1/projects/:ref/custom-hostname/activate", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  return c.json(await activateCustomHostname(row));
+});
+
+projects.delete("/api/v1/projects/:ref/custom-hostname", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  return c.json(await deleteCustomHostname(row));
+});
+
 // Change a dedicated project's compute size. The dashboard sends this as a billing
 // "compute_instance" addon (ci_<size>); we map it to an instance resize. GET returns
 // the available tiers + current so the compute-and-disk page can render.
@@ -158,7 +212,13 @@ projects.get("/api/v1/projects/:ref/billing/addons", async (c) => {
   const row = await getProjectByRef(c.req.param("ref"));
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, row.organizationId, { project: ["content"] });
-  return c.json({ selected_addons: [], available_addons: [], compute_size: row.computeSize });
+  // Custom domains are dedicated/EC2 only — surface the custom_domain addon there so the
+  // dashboard enables the Custom Domains page (it gates on this addon being present).
+  const selected_addons =
+    row.infrastructureType === "shared"
+      ? []
+      : [{ type: "custom_domain", variant: { identifier: "cd_default", name: "Custom Domain" } }];
+  return c.json({ selected_addons, available_addons: [], compute_size: row.computeSize });
 });
 
 projects.post("/api/v1/projects/:ref/billing/addons", async (c) => {

@@ -148,6 +148,13 @@
       "when": 1780871017703,
       "tag": "0020_project_compute_size",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1780885363350,
+      "tag": "0021_project_custom_hostname",
+      "breakpoints": true
     }
   ]
 }

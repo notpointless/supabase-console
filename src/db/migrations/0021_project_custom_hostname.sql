@@ -1,0 +1,1 @@
+ALTER TABLE "project" ADD COLUMN "custom_hostname" jsonb;
