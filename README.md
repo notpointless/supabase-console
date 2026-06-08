@@ -6,10 +6,21 @@ Multi-tenant control panel for provisioning and managing Supabase projects on sh
 
 ## Features
 
-- **Multi-tenant** — provision and manage many Supabase projects from one dashboard.
-- **Shared or dedicated** — run a project on shared infrastructure or its own dedicated AWS EC2 instance.
-- **Dedicated extras** — resize compute and disk, custom domains with automatic HTTPS, and a connection pooler.
-- **Security & org** — SSO, MFA, audit logs, scoped access tokens, and per-organization AWS credentials.
+- **Multi-tenant control plane** — provision and manage many isolated Supabase projects from one dashboard.
+- **Your infra, your choice** — run a project on shared local infrastructure or its own dedicated **AWS EC2** instance in your own account.
+- **Full project lifecycle** — provision, pause, resume, restart, resize compute & disk, and scheduled logical backups.
+- **Deploy from GitHub** — connect a repository and apply your `supabase/migrations` to the database automatically when you push to your production branch.
+- **Database branching** — every pull request gets its own isolated preview database, torn down automatically when the PR closes.
+- **Custom domains** — point your own domain at a project with automatic HTTPS, plus a built-in connection pooler (dedicated projects).
+- **Single sign-on (SAML)** — per-organization SSO against your own identity provider (Okta, Azure AD, Google Workspace).
+- **Two-factor authentication** — TOTP MFA for dashboard accounts, with optional per-organization enforcement.
+- **Scoped access tokens** — personal API tokens with fine-grained scopes for scripting and automation.
+- **Audit logs** — a trail of organization and project activity.
+- **Network & transport security** — IP-based network restrictions and enforced SSL on the database.
+- **Organizations & roles** — multiple organizations, role-based team access, and per-org AWS credentials + GitHub App.
+- **The complete Studio** — table editor, SQL editor, auth, storage, and edge functions, via a forked Supabase Studio.
+
+> Many of these are paid or enterprise-only on Supabase Cloud — here they run on infrastructure you control.
 
 ## Installation
 
