@@ -10,6 +10,7 @@
 //      status = active.
 //   4. get() / delete().
 import { promises as dns } from "node:dns";
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import {
   EC2Client,
@@ -31,6 +32,8 @@ export interface CustomHostnameState {
   status: "pending_validation" | "pending_deployment" | "active";
   sslStatus: "pending_validation" | "pending_deployment" | "active";
   originIp?: string;
+  originHost?: string; // the instance's public DNS — the CNAME target shown in the UI
+  txtValue?: string; // ownership token shown as the TXT record
   createdAt: string;
 }
 
@@ -75,32 +78,55 @@ async function publicIp(p: Project, ec2: EC2Client): Promise<string> {
 }
 
 // Shape the studio's custom-domains UI expects (Cloudflare custom-hostname response).
+// The verify step shows: a CNAME (hostname -> the project endpoint) when
+// verification_errors carries the CNAME hint, plus a TXT ownership record. `txt_name`
+// must be non-empty or the UI treats it as "still validating" and disables Verify.
 function toResponse(s: CustomHostnameState) {
+  const pending = s.status === "pending_validation";
   return {
     id: s.hostname,
     status: s.status,
     hostname: s.hostname,
     created_at: s.createdAt,
     custom_metadata: {},
-    custom_origin_server: s.originIp ?? "",
-    ownership_verification: s.originIp
-      ? { type: "A", name: s.hostname, value: s.originIp }
+    custom_origin_server: s.originHost ?? s.originIp ?? "",
+    // While pending, prompt the CNAME record (the UI renders its value from the project's
+    // own endpoint, which for EC2 is the instance host).
+    verification_errors: pending ? ["custom hostname does not CNAME to this zone."] : [],
+    ownership_verification: s.originHost
+      ? { type: "CNAME", name: s.hostname, value: s.originHost }
       : undefined,
     ssl: {
       id: s.hostname,
       type: "dv",
       method: "http",
       status: s.sslStatus,
+      txt_name: `_acme-challenge.${s.hostname}`,
+      txt_value: s.txtValue ?? "",
       settings: { http2: "on", tls_1_3: "on", min_tls_version: "1.2" },
       wildcard: false,
       bundle_method: "ubiquitous",
       certificate_authority: "lets_encrypt",
-      validation_records: s.originIp
-        ? [{ status: s.status, txt_name: s.hostname, txt_value: s.originIp }]
+      validation_records: s.txtValue
+        ? [{ status: s.status, txt_name: `_acme-challenge.${s.hostname}`, txt_value: s.txtValue }]
         : [],
       validation_errors: [] as { message: string }[],
     } as Record<string, unknown>,
   };
+}
+
+// The Custom Domains UI is a step machine; it switches on this wrapper `status`:
+//   2_initiated            -> show the DNS records to add (CustomDomainVerify)
+//   4_origin_setup_completed -> ready to activate (CustomDomainActivate)
+//   5_services_reconfigured  -> active (CustomDomainDelete)
+function stepStatus(s: CustomHostnameState): string {
+  if (s.status === "active") return "5_services_reconfigured";
+  if (s.status === "pending_deployment") return "4_origin_setup_completed";
+  return "2_initiated";
+}
+
+function wrap(s: CustomHostnameState, extra?: Record<string, unknown>) {
+  return { result: { ...toResponse(s), ...(extra ?? {}) }, status: stepStatus(s) };
 }
 
 async function save(p: Project, s: CustomHostnameState): Promise<void> {
@@ -113,7 +139,7 @@ export async function getCustomHostname(p: Project) {
   if (!s?.hostname) {
     throw new AppError(404, "no_hostname", "custom hostname configuration not found");
   }
-  return { result: toResponse(s) };
+  return wrap(s);
 }
 
 export async function initializeCustomHostname(p: Project, hostname: string) {
@@ -124,15 +150,19 @@ export async function initializeCustomHostname(p: Project, hostname: string) {
   }
   const { ec2 } = await ec2For(p);
   const originIp = await publicIp(p, ec2);
+  const originHost = (p.connection as { host?: string } | null)?.host;
+  const txtValue = createHash("sha256").update(`${p.ref}:${clean}`).digest("hex").slice(0, 40);
   const s: CustomHostnameState = {
     hostname: clean,
     status: "pending_validation",
     sslStatus: "pending_validation",
     originIp,
+    originHost,
+    txtValue,
     createdAt: new Date().toISOString(),
   };
   await save(p, s);
-  return { result: toResponse(s) };
+  return wrap(s);
 }
 
 export async function reverifyCustomHostname(p: Project) {
@@ -152,13 +182,16 @@ export async function reverifyCustomHostname(p: Project) {
     sslStatus: points ? "pending_deployment" : "pending_validation",
   };
   await save(p, next);
-  const resp = toResponse(next);
-  if (!points) {
-    (resp as { verification_errors?: string[] }).verification_errors = [
-      `${s.hostname} does not resolve to ${s.originIp ?? "the instance"} yet — add the A record and retry.`,
-    ];
-  }
-  return { result: resp };
+  return wrap(
+    next,
+    points
+      ? undefined
+      : {
+          verification_errors: [
+            `${s.hostname} does not resolve to ${s.originIp ?? "the instance"} yet — add the A record and retry.`,
+          ],
+        }
+  );
 }
 
 export async function activateCustomHostname(p: Project) {
@@ -201,7 +234,7 @@ sed -i 's|^COMPOSE_FILE=.*|COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.
   await runCommand(ssm, instanceIdOf(p), cmd);
   const next: CustomHostnameState = { ...s, status: "active", sslStatus: "active" };
   await save(p, next);
-  return { result: toResponse(next) };
+  return wrap(next);
 }
 
 export async function deleteCustomHostname(p: Project) {
