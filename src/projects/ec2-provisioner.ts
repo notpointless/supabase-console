@@ -18,6 +18,9 @@ import {
 } from "@aws-sdk/client-ec2";
 
 import { CloudWatchClient, GetMetricStatisticsCommand } from "@aws-sdk/client-cloudwatch";
+import { IAMClient } from "@aws-sdk/client-iam";
+import { SSMClient } from "@aws-sdk/client-ssm";
+import { ensureInstanceRole, deleteInstanceRole, runCommand } from "./ec2-ssm";
 import type { Provisioner, ProvisionResult, Connection, DiskConfig } from "./provisioner";
 import type { Project } from "../db/schema";
 import { getProjectSecrets } from "./secrets";
@@ -58,6 +61,19 @@ const INGRESS_PORTS = [22, 5432, 8000, 8443];
 
 function clientFor(region: string, creds: { accessKeyId: string; secretAccessKey: string }) {
   return new EC2Client({
+    region,
+    credentials: { accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey },
+  });
+}
+
+// IAM is a global service (no region). SSM is regional.
+function iamClientFor(creds: { accessKeyId: string; secretAccessKey: string }) {
+  return new IAMClient({
+    credentials: { accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey },
+  });
+}
+function ssmClientFor(region: string, creds: { accessKeyId: string; secretAccessKey: string }) {
+  return new SSMClient({
     region,
     credentials: { accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey },
   });
@@ -226,31 +242,54 @@ export class Ec2Provisioner implements Provisioner {
     });
 
     await ensureDefaultVpc(ec2);
-    const [imageId, groupId] = await Promise.all([latestAl2023Ami(ec2), ensureSecurityGroup(ec2)]);
+    // Per-instance IAM role/profile (SSM remote-exec). Torn down on delete + rollback.
+    const iam = iamClientFor(creds);
+    const [imageId, groupId, profileName] = await Promise.all([
+      latestAl2023Ami(ec2),
+      ensureSecurityGroup(ec2),
+      ensureInstanceRole(iam, project.ref),
+    ]);
 
-    const run = await ec2.send(
-      new RunInstancesCommand({
-        ImageId: imageId,
-        InstanceType: instanceTypeFor(project.computeSize) as any,
-        MinCount: 1,
-        MaxCount: 1,
-        SecurityGroupIds: [groupId],
-        UserData: userData(env),
-        BlockDeviceMappings: [
-          { DeviceName: "/dev/xvda", Ebs: { VolumeSize: 30, VolumeType: "gp3", DeleteOnTermination: true } },
-        ],
-        TagSpecifications: [
-          {
-            ResourceType: "instance",
-            Tags: [
-              { Key: "Name", Value: `supabase-${project.ref}` },
-              { Key: "supabase:project-ref", Value: project.ref },
-              { Key: "supabase:managed-by", Value: "supabase-console" },
-            ],
-          },
-        ],
-      })
-    );
+    const runCmd = new RunInstancesCommand({
+      ImageId: imageId,
+      InstanceType: instanceTypeFor(project.computeSize) as any,
+      MinCount: 1,
+      MaxCount: 1,
+      SecurityGroupIds: [groupId],
+      IamInstanceProfile: { Name: profileName },
+      UserData: userData(env),
+      BlockDeviceMappings: [
+        { DeviceName: "/dev/xvda", Ebs: { VolumeSize: 30, VolumeType: "gp3", DeleteOnTermination: true } },
+      ],
+      TagSpecifications: [
+        {
+          ResourceType: "instance",
+          Tags: [
+            { Key: "Name", Value: `supabase-${project.ref}` },
+            { Key: "supabase:project-ref", Value: project.ref },
+            { Key: "supabase:managed-by", Value: "supabase-console" },
+          ],
+        },
+      ],
+    });
+    // A just-created instance profile isn't usable by RunInstances for a few seconds
+    // (IAM propagation). Retry on the invalid-profile error. If the launch never
+    // succeeds, the role is cleaned up by the task rollback -> delete().
+    let run;
+    for (let i = 0; i < 12; i++) {
+      try {
+        run = await ec2.send(runCmd);
+        break;
+      } catch (e) {
+        const msg = (e as { message?: string })?.message ?? "";
+        if (/Invalid IAM Instance Profile|instance profile/i.test(msg) && i < 11) {
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+        throw e;
+      }
+    }
+    if (!run) throw new Error("EC2 RunInstances did not return");
 
     const instanceId = run.Instances?.[0]?.InstanceId;
     if (!instanceId) throw new Error("EC2 did not return an instance id");
@@ -276,6 +315,7 @@ export class Ec2Provisioner implements Provisioner {
       };
     } catch (e) {
       await this.terminateWithRetry(ec2, instanceId).catch(() => {});
+      await deleteInstanceRole(iam, project.ref).catch(() => {});
       throw e;
     }
   }
@@ -446,12 +486,43 @@ export class Ec2Provisioner implements Provisioner {
     } catch {
       // metric not available yet (instance just launched) — report 0
     }
-    return { cpuPercent, ramUsed: 0, ramTotal: 0, diskUsed: 0, diskSize: 0 };
+    // RAM + disk come from the instance itself via SSM (no CloudWatch agent needed).
+    // Best-effort: if the SSM agent hasn't registered yet, leave them at 0.
+    let ramUsed = 0,
+      ramTotal = 0,
+      diskUsed = 0,
+      diskSize = 0;
+    try {
+      const ssm = ssmClientFor(project.region, creds);
+      const out = await runCommand(
+        ssm,
+        instanceIdOf(project),
+        "free -b | awk '/Mem:/{print \"mem\", $2, $3}'; df -B1 / | tail -1 | awk '{print \"disk\", $2, $3}'"
+      );
+      for (const line of out.split("\n")) {
+        const [k, a, b] = line.trim().split(/\s+/);
+        if (k === "mem") {
+          ramTotal = Number(a) || 0;
+          ramUsed = Number(b) || 0;
+        } else if (k === "disk") {
+          diskSize = Number(a) || 0;
+          diskUsed = Number(b) || 0;
+        }
+      }
+    } catch {
+      // SSM agent not registered yet / command failed — RAM/disk stay 0
+    }
+    return { cpuPercent, ramUsed, ramTotal, diskUsed, diskSize };
   }
 
   async delete(project: Project): Promise<void> {
     const creds = await getCredentials(project.organizationId);
     const ec2 = clientFor(project.region, creds);
-    await this.terminateWithRetry(ec2, instanceIdOf(project));
+    // Terminate the instance (if one was recorded) AND tear down the per-instance IAM
+    // role/profile — even on a failed provision that never recorded an instance, so no
+    // IAM resource is ever orphaned.
+    const instanceId = (project.connection as { instanceId?: string } | null)?.instanceId;
+    if (instanceId) await this.terminateWithRetry(ec2, instanceId);
+    await deleteInstanceRole(iamClientFor(creds), project.ref);
   }
 }
