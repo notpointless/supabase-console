@@ -126,6 +126,17 @@ export async function resizeProject(ref: string, computeSize: string): Promise<v
   await getQueue().enqueue("resize_compute", { ref });
 }
 
+// Current resource usage. EC2 -> CloudWatch (CPU); shared -> handled by the BFF
+// (local docker stats). Returns { infra } so the BFF knows which path to use.
+export async function getProjectMetrics(ref: string) {
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  if (row.infrastructureType === "shared") return { infra: "shared" as const };
+  const p = getProvisionerFor(row);
+  const m = p.getMetrics ? await p.getMetrics(row) : { cpuPercent: 0, ramUsed: 0, ramTotal: 0, diskUsed: 0, diskSize: 0 };
+  return { infra: "ec2" as const, ...m };
+}
+
 // Read a dedicated project's disk (EBS) config live from AWS.
 export async function getProjectDisk(ref: string) {
   const row = await getProjectByRef(ref);

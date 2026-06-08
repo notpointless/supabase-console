@@ -17,6 +17,7 @@ import {
   ModifyVolumeCommand,
 } from "@aws-sdk/client-ec2";
 
+import { CloudWatchClient, GetMetricStatisticsCommand } from "@aws-sdk/client-cloudwatch";
 import type { Provisioner, ProvisionResult, Connection, DiskConfig } from "./provisioner";
 import type { Project } from "../db/schema";
 import { getProjectSecrets } from "./secrets";
@@ -409,6 +410,43 @@ export class Ec2Provisioner implements Provisioner {
         Throughput: cfg.type === "gp3" ? cfg.throughput : undefined,
       })
     );
+  }
+
+  // --- Metrics (CloudWatch) ---
+  // CPU comes from CloudWatch's built-in AWS/EC2 CPUUtilization — EC2 reports it
+  // automatically, so NOTHING is created here (no agent, no IAM role, no alarms) and
+  // there is nothing to tear down. RAM/disk would require the CloudWatch agent + an
+  // instance IAM role and are left at 0 until that (separately torn down) is added.
+  async getMetrics(
+    project: Project
+  ): Promise<{ cpuPercent: number; ramUsed: number; ramTotal: number; diskUsed: number; diskSize: number }> {
+    const creds = await getCredentials(project.organizationId);
+    const cw = new CloudWatchClient({
+      region: project.region,
+      credentials: { accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey },
+    });
+    const now = Date.now();
+    let cpuPercent = 0;
+    try {
+      const out = await cw.send(
+        new GetMetricStatisticsCommand({
+          Namespace: "AWS/EC2",
+          MetricName: "CPUUtilization",
+          Dimensions: [{ Name: "InstanceId", Value: instanceIdOf(project) }],
+          StartTime: new Date(now - 30 * 60 * 1000),
+          EndTime: new Date(now),
+          Period: 300,
+          Statistics: ["Average"],
+        })
+      );
+      const points = (out.Datapoints ?? []).sort(
+        (a, b) => (a.Timestamp?.getTime() ?? 0) - (b.Timestamp?.getTime() ?? 0)
+      );
+      cpuPercent = Math.round((points.at(-1)?.Average ?? 0) * 10) / 10;
+    } catch {
+      // metric not available yet (instance just launched) — report 0
+    }
+    return { cpuPercent, ramUsed: 0, ramTotal: 0, diskUsed: 0, diskSize: 0 };
   }
 
   async delete(project: Project): Promise<void> {

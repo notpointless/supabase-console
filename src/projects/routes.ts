@@ -17,6 +17,7 @@ import {
   resumeProject,
   restartProject,
   resizeProject,
+  getProjectMetrics,
   getProjectDisk,
   resizeProjectDisk,
   deleteProject,
@@ -171,6 +172,16 @@ projects.post("/api/v1/projects/:ref/billing/addons", async (c) => {
     await resizeProject(ref, body.addon_variant.replace(/^ci_/, "")); // ci_large -> large
   }
   return c.json({ ok: true });
+});
+
+// Current resource usage. EC2 -> CloudWatch CPU (no AWS resources created).
+projects.get("/api/v1/projects/:ref/metrics", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  return c.json(await getProjectMetrics(ref));
 });
 
 // Disk (EBS) config for a dedicated project — live from AWS; ModifyVolume is online.

@@ -40,6 +40,10 @@ export interface Provisioner {
   // Change the project's compute (dedicated only): stop, switch to the instance type
   // for project.computeSize, start. Returns the (new) connection to persist.
   resize?(project: Project): Promise<Connection>;
+  // Current resource usage (dedicated only) — CPU from CloudWatch (no resources created).
+  getMetrics?(
+    project: Project
+  ): Promise<{ cpuPercent: number; ramUsed: number; ramTotal: number; diskUsed: number; diskSize: number }>;
   // Read the dedicated instance's current disk (EBS) config.
   getDiskConfig?(project: Project): Promise<DiskConfig>;
   // Apply a new disk (EBS) config in place (ModifyVolume — online, no downtime).
