@@ -66,9 +66,11 @@ function clientFor(region: string, creds: { accessKeyId: string; secretAccessKey
   });
 }
 
-// IAM is a global service (no region). SSM is regional.
+// IAM is a global service but the SDK still requires a region — us-east-1 hosts the
+// global endpoint. SSM is regional.
 function iamClientFor(creds: { accessKeyId: string; secretAccessKey: string }) {
   return new IAMClient({
+    region: "us-east-1",
     credentials: { accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey },
   });
 }
