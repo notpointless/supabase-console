@@ -540,10 +540,22 @@ export class Ec2Provisioner implements Provisioner {
   async delete(project: Project): Promise<void> {
     const creds = await getCredentials(project.organizationId);
     const ec2 = clientFor(project.region, creds);
-    // Terminate the instance (if one was recorded) AND tear down the per-instance IAM
-    // role/profile — even on a failed provision that never recorded an instance, so no
-    // IAM resource is ever orphaned.
-    const instanceId = (project.connection as { instanceId?: string } | null)?.instanceId;
+    // Terminate the instance AND tear down the per-instance IAM role — never orphan
+    // either. The connection (with instanceId) is only persisted once provision returns,
+    // so a project deleted WHILE STILL PROVISIONING has no recorded instanceId — fall
+    // back to finding the instance by its project-ref tag.
+    let instanceId = (project.connection as { instanceId?: string } | null)?.instanceId;
+    if (!instanceId) {
+      const out = await ec2.send(
+        new DescribeInstancesCommand({
+          Filters: [
+            { Name: "tag:supabase:project-ref", Values: [project.ref] },
+            { Name: "instance-state-name", Values: ["pending", "running", "stopping", "stopped"] },
+          ],
+        })
+      );
+      instanceId = out.Reservations?.[0]?.Instances?.[0]?.InstanceId;
+    }
     if (instanceId) await this.terminateWithRetry(ec2, instanceId);
     await deleteInstanceRole(iamClientFor(creds), project.ref);
   }
