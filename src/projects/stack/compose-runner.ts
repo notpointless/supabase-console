@@ -13,9 +13,21 @@ export type Exec = (cmd: string, args: string[]) => Promise<void>;
 
 const defaultExec: Exec = (cmd, args) =>
   new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: "inherit" });
+    // Capture output via pipes instead of inheriting the parent's stdio. The control
+    // plane often runs without a console (background / detached / service). Inheriting
+    // absent console handles makes Windows fail console apps like `docker` at startup
+    // with STATUS_DLL_INIT_FAILED (exit 3221225794 / 0xC0000142) — which silently broke
+    // shared-stack teardown. Piping gives the child its own handles and surfaces stderr.
+    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout?.on("data", (d) => (output += d.toString()));
+    child.stderr?.on("data", (d) => (output += d.toString()));
     child.on("error", reject);
-    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} ${args.join(" ")} exited ${code}`))));
+    child.on("close", (code) =>
+      code === 0
+        ? resolve()
+        : reject(new Error(`${cmd} ${args.join(" ")} exited ${code}${output ? `: ${output.trim().slice(-300)}` : ""}`))
+    );
   });
 
 export class DockerComposeRunner implements ComposeRunner {
