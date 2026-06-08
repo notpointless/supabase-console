@@ -5,7 +5,7 @@ dist/
 .data/
 
 # Local planning/design docs (specs, plans) — kept out of the repo
-docs/superpowers/
+superpowers/
 
 # Repo CLAUDE.md kept local (not committed)
 CLAUDE.md
