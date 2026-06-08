@@ -1,6 +1,6 @@
 # supabase-console
 
-Multi-tenant control panel for provisioning and managing Supabase projects on your own AWS account.
+Multi-tenant control panel for provisioning and managing Supabase projects on shared local infrastructure or dedicated AWS EC2.
 
 ![Dashboard](docs/dashboard.png)
 
@@ -13,18 +13,27 @@ Multi-tenant control panel for provisioning and managing Supabase projects on yo
 
 ## Installation
 
+This repo is the **control-plane backend** (`:3000`). The dashboard is a
+[forked Supabase Studio](https://github.com/notpointless/supabase) (`:8082`) that proxies to it — run both.
+
 Requires Node, pnpm, Docker, and the `pointless` CLI.
 
 ```bash
+# 1. Backend (this repo)
 git clone https://github.com/notpointless/supabase-console.git
-cd supabase-console
-pnpm install
-cp .env.example .env       # then fill in the values
-pointless run migrate      # set up the database
-pointless dev              # start the console
+cd supabase-console && pnpm install
+cp .env.example .env          # fill in the values
+pointless run migrate
+pointless dev                 # backend on :3000
+
+# 2. Dashboard (the forked Studio)
+git clone https://github.com/notpointless/supabase.git
+cd supabase/apps/studio && pnpm install
+# set apps/studio/.env.local: CONSOLE_API_URL=http://localhost:3000, NEXT_PUBLIC_IS_PLATFORM=true
+pnpm dev                      # dashboard on :8082
 ```
 
-Then POST to `/api/auth/install/setup` to create the first admin.
+Open `http://localhost:8082/dashboard` — it redirects to **/setup/install** to create the first admin.
 
 ## Commands
 
