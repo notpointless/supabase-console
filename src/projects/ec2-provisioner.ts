@@ -56,8 +56,12 @@ const SG_NAME = "supabase-console-dedicated";
 // upstream. Overridable via env for private forks / pinned branches.
 const SUPABASE_FORK_REPO = process.env.SUPABASE_FORK_REPO ?? "https://github.com/notpointless/supabase";
 const SUPABASE_FORK_BRANCH = process.env.SUPABASE_FORK_BRANCH ?? "chore/console-fork";
-// Ports the Supabase self-hosting stack exposes via Kong, plus Postgres + SSH.
-const INGRESS_PORTS = [22, 5432, 8000, 8443];
+// Ports opened to the instance. Kong API (8000/8443) + Postgres (5432) are the stack's
+// public surface; all remote management goes through SSM (see ec2-ssm.ts), so SSH (22) is
+// intentionally NOT opened — it'd be pure attack surface. Operators needing a shell use
+// SSM Session Manager. NOTE: 5432 is open to 0.0.0.0/0 for direct DB access; operators who
+// don't need that should tighten this SG to their own CIDR.
+const INGRESS_PORTS = [5432, 8000, 8443];
 
 function clientFor(region: string, creds: { accessKeyId: string; secretAccessKey: string }) {
   return new EC2Client({

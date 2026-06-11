@@ -1,9 +1,9 @@
-import { spawn } from "node:child_process";
 import { eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { project, projectRepoConnection, orgGithubConnection, type Project } from "../db/schema";
 import { decrypt } from "../crypto/secrets";
 import { AppError } from "../http/error";
+import { execProjectSql, queryProjectSql } from "../projects/db-exec";
 
 // ---------------------------------------------------------------------------
 // GitHub deploy pipeline (self-host).
@@ -82,51 +82,13 @@ export async function fetchMigrations(
   return migrations;
 }
 
-/** Run SQL inside a shared-infra project's db container via stdin. */
-function psql(ref: string, sql: string): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn("docker", [
-      "exec",
-      "-i",
-      `sb-${ref}-db-1`,
-      "psql",
-      "-U",
-      "postgres",
-      "-d",
-      "postgres",
-      "-v",
-      "ON_ERROR_STOP=1",
-    ]);
-    let stderr = "";
-    child.stderr.on("data", (d) => (stderr += d.toString()));
-    child.on("error", reject);
-    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.slice(0, 400) || `psql exited ${code}`))));
-    child.stdin.write(sql);
-    child.stdin.end();
-  });
-}
-
 /** Read the set of already-applied migration versions from the project DB. */
-async function appliedVersions(ref: string): Promise<Set<string>> {
-  return new Promise<Set<string>>((resolve) => {
-    const child = spawn("docker", [
-      "exec",
-      `sb-${ref}-db-1`,
-      "psql",
-      "-U",
-      "postgres",
-      "-d",
-      "postgres",
-      "-t",
-      "-A",
-      "-c",
-      "select version from supabase_migrations.schema_migrations",
-    ]);
-    let out = "";
-    child.stdout.on("data", (d) => (out += d.toString()));
-    child.on("error", () => resolve(new Set()));
-    child.on("close", () => resolve(new Set(out.split("\n").map((s) => s.trim()).filter(Boolean))));
-  });
+async function appliedVersionsFor(target: Project): Promise<Set<string>> {
+  const out = await queryProjectSql(
+    target,
+    "select version from supabase_migrations.schema_migrations"
+  );
+  return new Set(out.split("\n").map((s) => s.trim()).filter(Boolean));
 }
 
 export interface DeployResult {
@@ -136,9 +98,10 @@ export interface DeployResult {
   skipped: string[];
 }
 
-/** Core: apply a repo's migrations to a target project's DB (idempotent). */
+/** Core: apply a repo's migrations to a target project's DB (idempotent). Works on shared
+ *  and dedicated (EC2) infra — the SQL runs via the infra-aware db-exec primitive. */
 async function applyRepoMigrations(
-  targetRef: string,
+  target: Project,
   repoFullName: string,
   branch: string,
   token?: string
@@ -146,12 +109,12 @@ async function applyRepoMigrations(
   const migrations = await fetchMigrations(repoFullName, branch, token);
 
   // Ensure the migrations bookkeeping table exists.
-  await psql(
-    targetRef,
+  await execProjectSql(
+    target,
     `create schema if not exists supabase_migrations;
      create table if not exists supabase_migrations.schema_migrations (version text primary key, name text, statements text[], inserted_at timestamptz default now());`
   );
-  const applied = await appliedVersions(targetRef);
+  const applied = await appliedVersionsFor(target);
 
   const didApply: string[] = [];
   const skipped: string[] = [];
@@ -162,7 +125,7 @@ async function applyRepoMigrations(
     }
     // Apply the migration and record it in the same transaction.
     const stmt = `begin;\n${m.sql}\n;\ninsert into supabase_migrations.schema_migrations(version, name) values (${quote(m.version)}, ${quote(m.name)}) on conflict (version) do nothing;\ncommit;`;
-    await psql(targetRef, stmt);
+    await execProjectSql(target, stmt);
     didApply.push(m.name);
   }
   return { repo: repoFullName, branch, applied: didApply, skipped };
@@ -172,9 +135,6 @@ async function applyRepoMigrations(
 export async function deployProject(ref: string): Promise<DeployResult> {
   const [proj] = await db.select().from(project).where(eq(project.ref, ref));
   if (!proj) throw new AppError(404, "project_not_found", "Project not found");
-  if (proj.infrastructureType !== "shared") {
-    throw new AppError(400, "deploy_unsupported_infra", "GitHub deploy is only supported on shared infrastructure");
-  }
   const [conn] = await db
     .select()
     .from(projectRepoConnection)
@@ -182,7 +142,7 @@ export async function deployProject(ref: string): Promise<DeployResult> {
   if (!conn) throw new AppError(400, "no_repo_connection", "No GitHub repository is connected to this project");
 
   const token = await githubToken(proj.organizationId);
-  return applyRepoMigrations(ref, conn.repoFullName, conn.branch ?? "main", token);
+  return applyRepoMigrations(proj, conn.repoFullName, conn.branch ?? "main", token);
 }
 
 /**
@@ -197,9 +157,6 @@ export async function mergeBranchToProduction(branchId: string): Promise<DeployR
   if (!branch.parentProjectId) throw new AppError(400, "not_a_branch", "This project is not a preview branch");
   const [parent] = await db.select().from(project).where(eq(project.id, branch.parentProjectId));
   if (!parent) throw new AppError(404, "project_not_found", "Parent project not found");
-  if (parent.infrastructureType !== "shared") {
-    throw new AppError(400, "merge_unsupported_infra", "Branch merge is only supported on shared infrastructure");
-  }
   const [conn] = await db
     .select()
     .from(projectRepoConnection)
@@ -212,7 +169,7 @@ export async function mergeBranchToProduction(branchId: string): Promise<DeployR
     );
   }
   const token = await githubToken(parent.organizationId);
-  return applyRepoMigrations(parent.ref, conn.repoFullName, conn.branch ?? "main", token);
+  return applyRepoMigrations(parent, conn.repoFullName, conn.branch ?? "main", token);
 }
 
 function quote(s: string): string {
