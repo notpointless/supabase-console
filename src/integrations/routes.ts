@@ -472,14 +472,18 @@ integrations.post("/api/v1/projects/:ref/github/deploy", async (c) => {
 integrations.post("/api/v1/github/webhook", async (c) => {
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
   const raw = await c.req.text();
-  if (secret) {
-    const sig = c.req.header("x-hub-signature-256") ?? "";
-    const expected = "sha256=" + createHmac("sha256", secret).update(raw).digest("hex");
-    const a = Buffer.from(sig);
-    const b = Buffer.from(expected);
-    if (a.length !== b.length || !timingSafeEqual(a, b)) {
-      throw new AppError(401, "invalid_signature", "Invalid webhook signature");
-    }
+  // [console fork] FAIL CLOSED: without a configured secret an unsigned webhook can't be
+  // trusted — an attacker on a public backend could otherwise enqueue deploys or spin up /
+  // tear down preview-branch stacks (resource + cost abuse). Require the shared secret.
+  if (!secret) {
+    throw new AppError(503, "webhook_secret_unset", "Webhook secret is not configured");
+  }
+  const sig = c.req.header("x-hub-signature-256") ?? "";
+  const expected = "sha256=" + createHmac("sha256", secret).update(raw).digest("hex");
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    throw new AppError(401, "invalid_signature", "Invalid webhook signature");
   }
   const event = c.req.header("x-github-event");
   if (event !== "push" && event !== "pull_request") return c.json({ ok: true, ignored: true });
