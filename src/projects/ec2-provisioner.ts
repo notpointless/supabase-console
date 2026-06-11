@@ -15,6 +15,7 @@ import {
   ModifyInstanceAttributeCommand,
   DescribeVolumesCommand,
   ModifyVolumeCommand,
+  DescribeVolumesModificationsCommand,
   AllocateAddressCommand,
   AssociateAddressCommand,
   DisassociateAddressCommand,
@@ -68,6 +69,18 @@ const SUPABASE_FORK_BRANCH = process.env.SUPABASE_FORK_BRANCH ?? "chore/console-
 // SSM Session Manager. NOTE: 5432 is open to 0.0.0.0/0 for direct DB access; operators who
 // don't need that should tighten this SG to their own CIDR.
 const INGRESS_PORTS = [5432, 8000, 8443];
+
+// [console fork] Grow the root partition + filesystem to fill a just-resized EBS volume. Detects
+// the root device (NVMe on Graviton/nitro vs xvd) and fs type (xfs on AL2023 vs ext4) at runtime,
+// so it works regardless of instance family. Run over SSM after ModifyVolume.
+const GROW_DISK_SCRIPT = `#!/bin/bash
+set -e
+ROOT_PART=$(findmnt -no SOURCE /)
+DISK="/dev/$(lsblk -no pkname "$ROOT_PART")"
+PARTNUM=$(echo "$ROOT_PART" | grep -o '[0-9]*$')
+growpart "$DISK" "$PARTNUM" || true
+FSTYPE=$(findmnt -no FSTYPE /)
+if [ "$FSTYPE" = "xfs" ]; then xfs_growfs /; else resize2fs "$ROOT_PART"; fi`;
 
 function clientFor(region: string, creds: { accessKeyId: string; secretAccessKey: string }) {
   return new EC2Client({
@@ -602,6 +615,29 @@ docker compose up -d`;
         Throughput: cfg.type === "gp3" ? cfg.throughput : undefined,
       })
     );
+    // [console fork] ModifyVolume grows the EBS volume but NOT the OS partition/filesystem, so
+    // the extra space would be unusable. Wait for the modification to apply, then grow the root
+    // partition + filesystem on the instance over SSM (device + fs-type detected at runtime).
+    // Best-effort — the volume IS larger regardless; an operator can finish the grow manually.
+    await this.waitForVolumeModification(ec2, volId);
+    try {
+      const ssm = ssmClientFor(project.region, creds);
+      await runCommand(ssm, instanceIdOf(project), GROW_DISK_SCRIPT);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`[ec2 resizeDisk] filesystem grow failed for ${project.ref}:`, e instanceof Error ? e.message : e);
+    }
+  }
+
+  // Poll until an EBS volume modification has applied (reaches optimizing/completed) so the OS
+  // sees the new size before we grow the partition.
+  private async waitForVolumeModification(ec2: EC2Client, volumeId: string): Promise<void> {
+    for (let i = 0; i < 40; i++) {
+      const out = await ec2.send(new DescribeVolumesModificationsCommand({ VolumeIds: [volumeId] }));
+      const state = out.VolumesModifications?.[0]?.ModificationState;
+      if (!state || state === "optimizing" || state === "completed") return;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
   }
 
   // --- Metrics (CloudWatch) ---
