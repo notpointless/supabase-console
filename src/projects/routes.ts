@@ -27,7 +27,7 @@ import type { Project } from "../db/schema";
 import { project, organization, member } from "../db/schema";
 import { db } from "../db/client";
 import { eq, and } from "drizzle-orm";
-import { getProvisionerFor } from "./provisioner";
+import { getQueue } from "../jobs/queue";
 import { listBackups, createBackup, backupFilePath, restoreBackup } from "./backups";
 import { listFunctionSecrets, setFunctionSecrets, deleteFunctionSecrets } from "./function-secrets";
 import { getRealtimeConfig, updateRealtimeConfig } from "./realtime-config";
@@ -340,14 +340,10 @@ projects.patch("/api/v1/projects/:ref/data-api", async (c) => {
     .update(project)
     .set({ dataApiEnabled: enabled, autoExposeNewTables: enabled, updatedAt: new Date() })
     .where(eq(project.ref, ref));
-  const updated = (await getProjectByRef(ref))!;
-  // Re-apply to the running stack so PostgREST schema exposure changes immediately.
-  try {
-    await getProvisionerFor(updated).reconfigure?.(updated);
-  } catch {
-    /* best-effort; flag is persisted regardless */
-  }
-  return c.json(publicProject(updated));
+  // Re-apply to the running stack asynchronously (a reconfigure recreates containers; inline
+  // would time the dashboard out). The flag is persisted regardless.
+  if (row.status === "active") await getQueue().enqueue("reconfigure", { ref });
+  return c.json(publicProject((await getProjectByRef(ref))!));
 });
 
 // ---------------------------------------------------------------------------
@@ -512,20 +508,14 @@ projects.patch("/api/v1/projects/:ref/auth-config", async (c) => {
   await requirePermission(c, row.organizationId, { project: ["update"] });
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const merged = { ...((row.authConfig ?? {}) as Record<string, unknown>), ...(body ?? {}) };
-  const [updated] = await db
+  await db
     .update(project)
     .set({ authConfig: merged, updatedAt: new Date() })
-    .where(eq(project.id, row.id))
-    .returning();
-  // Push the change to the live stack so GoTrue reloads with it (best-effort — only an
-  // active project has a running stack to reconfigure; others apply it when they next start).
-  try {
-    if (updated && updated.status === "active") {
-      await getProvisionerFor(updated).reconfigure?.(updated);
-    }
-  } catch {
-    /* persisted; reconfigure is best-effort */
-  }
+    .where(eq(project.id, row.id));
+  // Apply to the live stack ASYNCHRONOUSLY: a reconfigure recreates containers (the GoTrue
+  // restart alone is 10-30s), so doing it inline timed the dashboard out. The override is
+  // persisted regardless and also applies on the next (re)provision (paused/EC2 included).
+  if (row.status === "active") await getQueue().enqueue("reconfigure", { ref });
   return c.json(merged);
 });
 
@@ -547,13 +537,9 @@ projects.post("/api/v1/projects/:ref/third-party-auth", async (c) => {
   await requirePermission(c, row.organizationId, { project: ["update"] });
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const created = await addThirdPartyAuth(row, body);
-  // Push the new issuer's keys into the running stack's verify set (best-effort; active only).
-  const updated = await getProjectByRef(row.ref);
-  try {
-    if (updated && updated.status === "active") await getProvisionerFor(updated).reconfigure?.(updated);
-  } catch {
-    /* persisted; reconfigure is best-effort */
-  }
+  // Merge the new issuer's keys into the stack verify set asynchronously (reconfigure recreates
+  // containers; doing it inline would time the dashboard out).
+  if (row.status === "active") await getQueue().enqueue("reconfigure", { ref: row.ref });
   return c.json(created);
 });
 
@@ -563,12 +549,7 @@ projects.delete("/api/v1/projects/:ref/third-party-auth/:id", async (c) => {
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, row.organizationId, { project: ["update"] });
   await deleteThirdPartyAuth(row, c.req.param("id"));
-  const updated = await getProjectByRef(row.ref);
-  try {
-    if (updated && updated.status === "active") await getProvisionerFor(updated).reconfigure?.(updated);
-  } catch {
-    /* persisted; reconfigure is best-effort */
-  }
+  if (row.status === "active") await getQueue().enqueue("reconfigure", { ref: row.ref });
   return c.json({ deleted: true });
 });
 
@@ -837,11 +818,7 @@ projects.post("/api/v1/projects/:ref/signing-keys", async (c) => {
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, row.organizationId, { project: ["update"] });
   const key = addStandbyKey(ref);
-  try {
-    await getProvisionerFor(row).reconfigure?.(row);
-  } catch {
-    /* key persisted; reconfigure is best-effort */
-  }
+  if (row.status === "active") await getQueue().enqueue("reconfigure", { ref });
   return c.json({ kid: key.kid, algorithm: key.algorithm, status: key.status, created_at: key.created_at });
 });
 
@@ -859,11 +836,7 @@ projects.patch("/api/v1/projects/:ref/signing-keys/:kid", async (c) => {
     // The derived current ES256 key + legacy HS256 verifier aren't operator-managed.
     throw new AppError(400, "key_not_managed", "This key's status is managed automatically");
   }
-  try {
-    await getProvisionerFor(row).reconfigure?.(row);
-  } catch {
-    /* best-effort */
-  }
+  if (row.status === "active") await getQueue().enqueue("reconfigure", { ref });
   return c.json({ kid: c.req.param("kid"), status });
 });
 
@@ -875,11 +848,7 @@ projects.delete("/api/v1/projects/:ref/signing-keys/:kid", async (c) => {
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, row.organizationId, { project: ["update"] });
   removeStandbyKey(ref, c.req.param("kid"));
-  try {
-    await getProvisionerFor(row).reconfigure?.(row);
-  } catch {
-    /* best-effort */
-  }
+  if (row.status === "active") await getQueue().enqueue("reconfigure", { ref });
   return c.json({ ok: true });
 });
 
@@ -894,12 +863,8 @@ projects.post("/api/v1/projects/:ref/api-keys", async (c) => {
   await requirePermission(c, row.organizationId, { project: ["update"] });
   const secrets = await getProjectSecrets(row.id);
   if (!secrets) throw new AppError(404, "project_secrets_not_found", "Project secrets not found");
-  // Re-apply so an already-running project's kong picks up the keys (best-effort).
-  try {
-    await getProvisionerFor(row).reconfigure?.(row);
-  } catch {
-    /* keys are still returned; reconfigure is best-effort */
-  }
+  // Re-apply (async) so an already-running project's kong picks up the keys.
+  if (row.status === "active") await getQueue().enqueue("reconfigure", { ref });
   return c.json({
     anonKey: secrets.anonKey,
     serviceRoleKey: secrets.serviceRoleKey,

@@ -80,6 +80,18 @@ export const taskList = {
     await getProvisionerFor(row).restart?.(row, services);
     await db.update(project).set({ updatedAt: new Date() }).where(eq(project.ref, ref));
   },
+  // [console fork] Apply a project's current stored config (auth-config / third-party-auth /
+  // data API) to its running stack. Config endpoints enqueue this instead of reconfiguring
+  // inline, so the HTTP request returns immediately rather than blocking 10-30s on a container
+  // recreate (which timed the dashboard out). Works for shared + EC2 — both implement reconfigure.
+  reconfigure: async (payload: unknown): Promise<void> => {
+    const { ref } = payload as { ref: string };
+    const row = await loadByRef(ref);
+    if (!row) return;
+    if (row.status !== "active") return;
+    await getProvisionerFor(row).reconfigure?.(row);
+    await db.update(project).set({ updatedAt: new Date() }).where(eq(project.ref, ref));
+  },
   resize_compute: async (payload: unknown): Promise<void> => {
     // Resize the dedicated instance to the project's current computeSize. The public
     // host changes on stop/start, so persist the returned connection.
