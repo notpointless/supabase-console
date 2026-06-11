@@ -214,6 +214,26 @@ export async function deleteAllPhysicalBackups(p: Project): Promise<void> {
       /* best-effort */
     }
   }
+  // Also delete any DETACHED volumes tagged to this project. A delete that races a restore
+  // can leave a restore volume created-but-not-attached (its DeleteOnTermination isn't set
+  // until attach), which would otherwise bill forever.
+  try {
+    const { DescribeVolumesCommand } = await import("@aws-sdk/client-ec2");
+    const vols = await ec2.send(
+      new DescribeVolumesCommand({
+        Filters: [
+          { Name: `tag:${REF_TAG}`, Values: [p.ref] },
+          { Name: "status", Values: ["available"] },
+        ],
+      })
+    );
+    for (const v of vols.Volumes ?? []) {
+      if (!v.VolumeId) continue;
+      await ec2.send(new DeleteVolumeCommand({ VolumeId: v.VolumeId })).catch(() => {});
+    }
+  } catch {
+    /* best-effort */
+  }
 }
 
 /** Delete snapshots beyond the retention window (newest SNAPSHOT_RETENTION are kept). */

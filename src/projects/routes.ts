@@ -747,6 +747,10 @@ projects.post("/api/v1/projects/:ref/backups", async (c) => {
   const row = await getProjectByRef(ref);
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, row.organizationId, { project: ["update"] });
+  // pg_dump needs the project's Postgres running (shared: container; EC2: instance over TCP).
+  if (row.status !== "active") {
+    throw new AppError(409, "project_not_running", `Project is ${row.status} — resume it before creating a backup`);
+  }
   try {
     const backup = await createBackup(row);
     // Dedicated projects also get an EBS snapshot (their physical backup) — the logical dump
@@ -783,6 +787,10 @@ projects.post("/api/v1/projects/:ref/backups/:id/restore", async (c) => {
   const row = await getProjectByRef(ref);
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, row.organizationId, { project: ["update"] });
+  // pg_restore needs the project's Postgres running.
+  if (row.status !== "active") {
+    throw new AppError(409, "project_not_running", `Project is ${row.status} — resume it before restoring a backup`);
+  }
   try {
     await restoreBackup(row, Number(c.req.param("id")));
     return c.json({ ok: true });
@@ -857,6 +865,11 @@ projects.post("/api/v1/projects/:ref/branches", async (c) => {
   const row = await getProjectByRef(ref);
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, row.organizationId, { project: ["update"] });
+  // Branch seeding pg_dumps the parent — it must be running, or the provision task would
+  // fail mid-seed with a raw pg_dump error.
+  if (row.status !== "active") {
+    throw new AppError(409, "project_not_running", `Project is ${row.status} — resume it before creating a branch`);
+  }
   const parsed = createBranchSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) throw new AppError(400, "validation_error", "Invalid branch payload", parsed.error.flatten());
   const branch = await createBranch({

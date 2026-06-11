@@ -54,9 +54,15 @@ export async function queryProjectAnalytics(
   params: Record<string, string | undefined>
 ): Promise<AnalyticsQueryResult> {
   assertEndpointName(name);
+  // Only query a RUNNING project. A paused/stopped EC2 instance is unreachable, so without
+  // this every graph query would hang for the full fetch timeout (and report pages fire many
+  // queries at once) — short-circuit to an honest empty series instead.
+  if (row.status !== "active") {
+    return { status: 200, body: { result: [], error: null } };
+  }
   const base = projectKongBase(row);
   if (!base) {
-    // Project isn't running (paused / not yet provisioned) — no log backend to query.
+    // Not yet provisioned — no log backend to query.
     return { status: 200, body: { result: [], error: null } };
   }
 

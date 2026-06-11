@@ -78,6 +78,16 @@ function buildMeta(slug: string, m: Partial<FunctionMeta>, fallbackTs: number): 
 function isShared(p: Project): boolean {
   return p.infrastructureType === "shared";
 }
+// Dedicated-instance writes go over SSM, which requires the instance to be running.
+function assertInstanceRunning(p: Project): void {
+  if (p.status !== "active") {
+    throw new AppError(
+      409,
+      "project_not_running",
+      `Project is ${p.status} — resume it before modifying edge functions on a dedicated instance`
+    );
+  }
+}
 function sharedBase(p: Project): string {
   return join(projectDir(p.ref), "volumes", "functions");
 }
@@ -217,6 +227,9 @@ export async function deployFunction(
     await writeFile(join(dir, META_FILE), JSON.stringify(meta), "utf8");
     return meta;
   }
+  // EC2 writes go over SSM, which needs the instance RUNNING — fail with a clear message
+  // instead of SSM's cryptic InvalidInstanceId when the project is paused/stopped.
+  assertInstanceRunning(p);
   // EC2: rewrite the function dir over SSM (base64 each file to survive the shell; names are
   // allowlist-validated above so interpolating them into the path can't inject).
   const writes = [
@@ -239,5 +252,6 @@ export async function deleteFunction(p: Project, slug: string): Promise<void> {
     await rm(join(sharedBase(p), slug), { recursive: true, force: true });
     return;
   }
+  assertInstanceRunning(p);
   await ssm(p, `rm -rf ${EC2_FN_BASE}/${slug}`);
 }
