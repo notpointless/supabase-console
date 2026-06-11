@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse, stringify } from "yaml";
@@ -104,6 +105,16 @@ export async function buildStack(
     API_EXTERNAL_URL: input.urls.apiExternalUrl,
     SITE_URL: input.urls.siteUrl,
     SUPABASE_PUBLIC_URL: input.urls.supabasePublicUrl,
+    // [console fork] Logflare (analytics) — a Postgres-backed log store; the vector service ships
+    // container logs into it and the dashboard's report/log graphs query it. Tokens are derived
+    // from the project's JWT secret so they're stable across (re)provision.
+    LOGFLARE_PUBLIC_ACCESS_TOKEN: createHmac("sha256", input.secrets.jwtSecret)
+      .update("logflare_public_v1")
+      .digest("hex"),
+    LOGFLARE_PRIVATE_ACCESS_TOKEN: createHmac("sha256", input.secrets.jwtSecret)
+      .update("logflare_private_v1")
+      .digest("hex"),
+    DOCKER_SOCKET_LOCATION: "/var/run/docker.sock",
   };
 
   // Data API disabled: don't expose the user's `public` schema over REST.
