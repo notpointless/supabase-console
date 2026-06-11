@@ -209,7 +209,9 @@ IP=$(curl -fsS http://169.254.169.254/latest/meta-data/public-ipv4 || echo local
   echo "SUPABASE_PUBLIC_URL=http://$IP:8000"
   echo "SITE_URL=http://$IP:8000"
 } >> .env
-docker compose up -d
+# Include the logs overlay so the analytics (Logflare) + vector services start — they back the
+# dashboard's report/log graphs. DOCKER_SOCKET_LOCATION + LOGFLARE_* tokens come from buildStack's env.
+docker compose -f docker-compose.yml -f docker-compose.logs.yml up -d
 
 # [console fork] A dedicated instance is the project's own box, so tune Postgres to
 # use its full RAM/CPU (the image ships conservative defaults: shared_buffers=128MB,
@@ -535,7 +537,7 @@ IP=$(curl -fsS http://169.254.169.254/latest/meta-data/public-ipv4 || echo local
   echo "SUPABASE_PUBLIC_URL=http://$IP:8000"
   echo "SITE_URL=http://$IP:8000"
 } >> .env
-docker compose up -d`;
+docker compose -f docker-compose.yml -f docker-compose.logs.yml up -d`;
     await runCommand(ssm, instanceIdOf(project), script);
   }
 
