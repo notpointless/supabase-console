@@ -29,8 +29,17 @@ export async function buildStack(
   // Merge any operator-created standby signing keys so the stack verifies tokens they
   // sign (in the JWKS) and GoTrue knows about them (GOTRUE_JWT_KEYS).
   const standby = readStandbyKeys(input.project.ref);
-  const jwtKeysArr = [...JSON.parse(signing.jwtKeys), ...standby.map((k) => k.privateJwk)];
-  const jwtJwksObj = JSON.parse(signing.jwtJwks) as { keys: unknown[] };
+  const jwtJwksObj = JSON.parse(signing.jwtJwks) as { keys: any[] };
+  // [console fork] GoTrue verifies ONLY against GOTRUE_JWT_KEYS, so that key set must ALSO
+  // carry the legacy HS256 verify key — otherwise the standard anon/service_role (HS256)
+  // tokens are rejected with "signing method HS256 is invalid", breaking every project-internal
+  // admin call. deriveSigningKeys already builds it into the JWKS; lift it into the keys array.
+  const legacyHs256 = jwtJwksObj.keys.find((k: any) => k?.kty === "oct");
+  const jwtKeysArr = [
+    ...JSON.parse(signing.jwtKeys),
+    ...(legacyHs256 ? [legacyHs256] : []),
+    ...standby.map((k) => k.privateJwk),
+  ];
   jwtJwksObj.keys.push(...standby.map((k) => k.publicJwk));
   const env: Record<string, string> = {
     ...STACK_ENV_DEFAULTS,
