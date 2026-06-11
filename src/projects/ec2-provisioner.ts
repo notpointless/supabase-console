@@ -35,7 +35,6 @@ import { buildStack } from "./stack/compose";
 import { thirdPartyJwkKeys } from "./third-party-auth";
 import { getCredentials } from "../aws/credentials-service";
 
-// Default instance type for a dedicated project (compute size is not yet persisted
 // Map the dashboard's compute tier -> a real EC2 instance type. The full supabase
 // stack needs ~4GB RAM, so the SMALLEST we ever launch is t3.medium (4GB) — tiers
 // below that (micro/small) are filtered out of the dedicated selector in the UI.
