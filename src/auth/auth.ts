@@ -46,6 +46,18 @@ export const auth = betterAuth({
     // created during install / via invite, never through an open sign-up endpoint.
     disableSignUp: true,
   },
+  // [console fork] Brute-force protection. better-auth DISABLES rate limiting in dev by
+  // default — enable it in all modes, with a tight limit on the credential + 2FA endpoints
+  // (memory store; fine for a single control-plane instance).
+  rateLimit: {
+    enabled: true,
+    window: 60,
+    max: 100,
+    customRules: {
+      "/sign-in/email": { window: 60, max: 5 },
+      "/two-factor/*": { window: 60, max: 5 },
+    },
+  },
   user: {
     additionalFields: {
       firstName: { type: "string", input: true, required: false },
@@ -60,6 +72,12 @@ export const auth = betterAuth({
     cookies: {
       session_token: { name: "supabase-console.session" },
       session_data: { name: "supabase-console.session-data" },
+    },
+    // [console fork] The backend sits behind the studio (next.config rewrite) and, in
+    // production, a reverse proxy — both forward the real client IP via x-forwarded-for.
+    // Without this better-auth can't determine the IP and SKIPS rate limiting entirely.
+    ipAddress: {
+      ipAddressHeaders: ["x-forwarded-for", "x-real-ip"],
     },
   },
   plugins: [
