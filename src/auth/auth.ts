@@ -74,10 +74,20 @@ export const auth = betterAuth({
       session_data: { name: "supabase-console.session-data" },
     },
     // [console fork] The backend sits behind the studio (next.config rewrite) and, in
-    // production, a reverse proxy — both forward the real client IP via x-forwarded-for.
-    // Without this better-auth can't determine the IP and SKIPS rate limiting entirely.
+    // production, a reverse proxy/CDN — they forward the real client IP via one of these
+    // headers. Without this better-auth can't determine the IP and SKIPS rate limiting
+    // entirely. Ordered most-specific (single trusted IP) first; better-auth uses the first
+    // present. NOTE: the backend must not be directly internet-reachable, or these are
+    // spoofable — it should only be reached through the proxy that sets them.
     ipAddress: {
-      ipAddressHeaders: ["x-forwarded-for", "x-real-ip"],
+      ipAddressHeaders: [
+        "cf-connecting-ip", // Cloudflare
+        "true-client-ip", // Cloudflare Enterprise / Akamai
+        "x-real-ip", // nginx
+        "fastly-client-ip", // Fastly
+        "x-client-ip",
+        "x-forwarded-for", // standard proxy chain (fallback)
+      ],
     },
   },
   plugins: [
