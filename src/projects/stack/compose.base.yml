@@ -387,6 +387,20 @@ services:
       # S3 protocol endpoint configuration
       S3_PROTOCOL_ACCESS_KEY_ID: ${S3_PROTOCOL_ACCESS_KEY_ID}
       S3_PROTOCOL_ACCESS_KEY_SECRET: ${S3_PROTOCOL_ACCESS_KEY_SECRET}
+      # [console fork] Vector buckets — Postgres-backed (pgvector), fully self-hosted, no AWS.
+      # The vector store lives in its own `storage_vectors` database, which storage creates on
+      # startup — that needs CREATEDB, so this URL uses the postgres superuser (the storage
+      # admin role can't create databases, and granting it CREATEDB would break existing
+      # projects that haven't run a role migration).
+      VECTOR_ENABLED: ${VECTOR_ENABLED:-true}
+      VECTOR_BUCKET_PROVIDER: ${VECTOR_BUCKET_PROVIDER:-pgvector}
+      VECTOR_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      VECTOR_STORE_MIGRATIONS_ENABLED: "true"
+      # [console fork] Iceberg analytics buckets — EC2/AWS only (the catalog proxies AWS S3
+      # Tables with sigv4). Off by default; enabled per-project with a regional catalog URL.
+      ICEBERG_ENABLED: ${ICEBERG_ENABLED:-false}
+      ICEBERG_CATALOG_URL: ${ICEBERG_CATALOG_URL:-}
+      ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE:-}
     volumes:
       - ./volumes/storage:/var/lib/storage:z
 

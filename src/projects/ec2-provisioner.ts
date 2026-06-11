@@ -246,6 +246,14 @@ function instanceIdOf(project: Project): string {
   return id;
 }
 
+// [console fork] Iceberg analytics buckets are an AWS-only capability: storage's Iceberg
+// catalog proxies AWS S3 Tables (sigv4, signed by the instance role's s3tables policy).
+// Dedicated instances get it enabled with their region's catalog endpoint.
+function applyIcebergEnv(env: Record<string, string>, region: string | null | undefined): void {
+  env.ICEBERG_ENABLED = "true";
+  env.ICEBERG_CATALOG_URL = `https://s3tables.${region ?? "us-east-1"}.amazonaws.com/iceberg/v1`;
+}
+
 export class Ec2Provisioner implements Provisioner {
   async provision(project: Project): Promise<ProvisionResult> {
     const secrets = await getProjectSecrets(project.id);
@@ -269,6 +277,7 @@ export class Ec2Provisioner implements Provisioner {
       thirdPartyJwks: thirdPartyJwkKeys(project),
       storageConfig: project.storageConfig as { fileSizeLimit?: number } | null,
     });
+    applyIcebergEnv(env, project.region);
 
     await ensureDefaultVpc(ec2);
     // Per-instance IAM role/profile (SSM remote-exec). Torn down on delete + rollback.
@@ -521,6 +530,7 @@ export class Ec2Provisioner implements Provisioner {
       thirdPartyJwks: thirdPartyJwkKeys(project),
       storageConfig: project.storageConfig as { fileSizeLimit?: number } | null,
     });
+    applyIcebergEnv(env, project.region);
     const envLines = Object.entries(env)
       .map(([k, v]) => `${k}=${v}`)
       .join("\n");

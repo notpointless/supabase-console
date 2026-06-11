@@ -16,6 +16,8 @@ import {
   DeleteInstanceProfileCommand,
   DetachRolePolicyCommand,
   DeleteRoleCommand,
+  PutRolePolicyCommand,
+  DeleteRolePolicyCommand,
 } from "@aws-sdk/client-iam";
 import {
   SSMClient,
@@ -24,6 +26,15 @@ import {
 } from "@aws-sdk/client-ssm";
 
 const SSM_POLICY_ARN = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore";
+
+// [console fork] Inline policy letting the instance's storage service drive AWS S3 Tables —
+// the backend for Iceberg analytics buckets (storage proxies the S3 Tables REST catalog with
+// sigv4 signed by this role). Scoped to S3 Tables only; regular S3 is untouched.
+const S3_TABLES_POLICY_NAME = "supabase-iceberg-s3tables";
+const S3_TABLES_POLICY = JSON.stringify({
+  Version: "2012-10-17",
+  Statement: [{ Effect: "Allow", Action: ["s3tables:*"], Resource: "*" }],
+});
 
 export function roleNameFor(ref: string): string {
   return `supabase-console-ssm-${ref}`;
@@ -64,6 +75,10 @@ export async function ensureInstanceRole(iam: IAMClient, ref: string): Promise<s
   } catch (e) {
     if (!isAlready(e)) throw e;
   }
+  // Inline S3 Tables policy (Iceberg analytics buckets). PutRolePolicy is an upsert.
+  await iam.send(
+    new PutRolePolicyCommand({ RoleName: name, PolicyName: S3_TABLES_POLICY_NAME, PolicyDocument: S3_TABLES_POLICY })
+  );
   return name;
 }
 
@@ -74,6 +89,7 @@ export async function deleteInstanceRole(iam: IAMClient, ref: string): Promise<v
     () => iam.send(new RemoveRoleFromInstanceProfileCommand({ InstanceProfileName: name, RoleName: name })),
     () => iam.send(new DeleteInstanceProfileCommand({ InstanceProfileName: name })),
     () => iam.send(new DetachRolePolicyCommand({ RoleName: name, PolicyArn: SSM_POLICY_ARN })),
+    () => iam.send(new DeleteRolePolicyCommand({ RoleName: name, PolicyName: S3_TABLES_POLICY_NAME })),
     () => iam.send(new DeleteRoleCommand({ RoleName: name })),
   ];
   for (const step of steps) {
