@@ -589,18 +589,29 @@ projects.get("/api/v1/projects/:ref/functions", async (c) => {
   return c.json(await listFunctions(row));
 });
 
-// Deploy (create/overwrite). Slug in the query (?slug=), body { file: [{name,content}], metadata }.
+// Deploy (create/overwrite). Slug in the query (?slug=). The dashboard sends multipart/form-data:
+// one or more `file` parts (each a File, its filename = the path) + a `metadata` JSON part.
 projects.post("/api/v1/projects/:ref/functions/deploy", async (c) => {
   await requireSession(c);
   const row = await getProjectByRef(c.req.param("ref"));
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, row.organizationId, { project: ["update"] });
   const slug = c.req.query("slug") ?? "";
-  const body = (await c.req.json().catch(() => ({}))) as {
-    file?: Array<{ name: string; content: string }>;
-    metadata?: Record<string, unknown>;
-  };
-  const created = await deployFunction(row, slug, body.file ?? [], (body.metadata ?? {}) as any);
+
+  const form = await c.req.parseBody({ all: true });
+  let metadata: Record<string, unknown> = {};
+  try {
+    metadata = JSON.parse(typeof form.metadata === "string" ? form.metadata : "{}");
+  } catch {
+    /* no metadata */
+  }
+  const rawFiles = Array.isArray(form.file) ? form.file : form.file ? [form.file] : [];
+  const files: Array<{ name: string; content: string }> = [];
+  for (const f of rawFiles) {
+    if (f instanceof File) files.push({ name: f.name, content: await f.text() });
+  }
+
+  const created = await deployFunction(row, slug, files, metadata as any);
   return c.json(created);
 });
 
