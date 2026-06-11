@@ -78,6 +78,54 @@ services:
     plugins:
       - name: cors
 
+  # [console fork] OIDC discovery + OAuth 2.1 server endpoints must be PUBLIC (no apikey):
+  # third-party apps fetch the discovery doc and run the authorize/token flow with their own
+  # OAuth client credentials, not the project's anon key. Without these open routes the
+  # catch-all auth-v1 route demands an apikey and discovery 401s (empty OAuth endpoints page).
+  - name: auth-v1-open-openid-config
+    _comment: 'Auth: /auth/v1/.well-known/openid-configuration -> http://auth:9999/.well-known/openid-configuration'
+    url: http://auth:9999/.well-known/openid-configuration
+    routes:
+      - name: auth-v1-open-openid-config
+        strip_path: true
+        paths:
+          - /auth/v1/.well-known/openid-configuration
+    plugins:
+      - name: cors
+
+  - name: auth-v1-open-oauth-authorize
+    _comment: 'Auth: /auth/v1/oauth/authorize -> http://auth:9999/oauth/authorize'
+    url: http://auth:9999/oauth/authorize
+    routes:
+      - name: auth-v1-open-oauth-authorize
+        strip_path: true
+        paths:
+          - /auth/v1/oauth/authorize
+    plugins:
+      - name: cors
+
+  - name: auth-v1-open-oauth-token
+    _comment: 'Auth: /auth/v1/oauth/token -> http://auth:9999/oauth/token'
+    url: http://auth:9999/oauth/token
+    routes:
+      - name: auth-v1-open-oauth-token
+        strip_path: true
+        paths:
+          - /auth/v1/oauth/token
+    plugins:
+      - name: cors
+
+  - name: auth-v1-open-oauth-userinfo
+    _comment: 'Auth: /auth/v1/oauth/userinfo -> http://auth:9999/oauth/userinfo (Bearer-authed)'
+    url: http://auth:9999/oauth/userinfo
+    routes:
+      - name: auth-v1-open-oauth-userinfo
+        strip_path: true
+        paths:
+          - /auth/v1/oauth/userinfo
+    plugins:
+      - name: cors
+
   - name: auth-v1-open-sso-acs
     url: "http://auth:9999/sso/saml/acs"
     routes:
