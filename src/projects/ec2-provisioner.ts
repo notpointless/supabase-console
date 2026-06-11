@@ -248,6 +248,7 @@ export class Ec2Provisioner implements Provisioner {
       dataApiEnabled: project.dataApiEnabled,
       authConfig: project.authConfig as Record<string, unknown> | null,
       thirdPartyJwks: thirdPartyJwkKeys(project),
+      storageConfig: project.storageConfig as { fileSizeLimit?: number } | null,
     });
 
     await ensureDefaultVpc(ec2);
@@ -440,6 +441,7 @@ export class Ec2Provisioner implements Provisioner {
       dataApiEnabled: project.dataApiEnabled,
       authConfig: project.authConfig as Record<string, unknown> | null,
       thirdPartyJwks: thirdPartyJwkKeys(project),
+      storageConfig: project.storageConfig as { fileSizeLimit?: number } | null,
     });
     const envLines = Object.entries(env)
       .map(([k, v]) => `${k}=${v}`)

@@ -22,6 +22,9 @@ export interface BuildStackInput {
   // [console fork] Third-Party Auth issuer JWKS keys to add to the stack's verify set, so the
   // data API accepts tokens signed by configured external issuers (Firebase, Auth0, etc.).
   thirdPartyJwks?: unknown[];
+  // [console fork] Storage settings overrides (the Storage settings page). Currently the upload
+  // file-size limit in bytes → the storage container's FILE_SIZE_LIMIT.
+  storageConfig?: { fileSizeLimit?: number } | null;
 }
 
 // [console fork] An auth-config override may only set RECOGNISED GoTrue settings — an
@@ -106,6 +109,12 @@ export async function buildStack(
   // Data API disabled: don't expose the user's `public` schema over REST.
   if (input.dataApiEnabled === false) {
     env.PGRST_DB_SCHEMAS = "graphql_public";
+  }
+
+  // [console fork] Storage upload size limit (the Storage settings page) → the storage container.
+  const fileSizeLimit = input.storageConfig?.fileSizeLimit;
+  if (typeof fileSizeLimit === "number" && fileSizeLimit > 0) {
+    env.FILE_SIZE_LIMIT = String(Math.floor(fileSizeLimit));
   }
 
   // [console fork] Layer the project's saved auth-config overrides on top, so the

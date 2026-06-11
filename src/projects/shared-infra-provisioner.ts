@@ -29,6 +29,7 @@ export class SharedInfraProvisioner implements Provisioner {
       dataApiEnabled: project.dataApiEnabled,
       authConfig: project.authConfig as Record<string, unknown> | null,
       thirdPartyJwks: thirdPartyJwkKeys(project),
+      storageConfig: project.storageConfig as { fileSizeLimit?: number } | null,
     });
     const dir = writeStack(project.ref, { composeYaml, env });
     await getComposeRunner().up(dir, name(project.ref));
@@ -65,6 +66,7 @@ export class SharedInfraProvisioner implements Provisioner {
       dataApiEnabled: project.dataApiEnabled,
       authConfig: project.authConfig as Record<string, unknown> | null,
       thirdPartyJwks: thirdPartyJwkKeys(project),
+      storageConfig: project.storageConfig as { fileSizeLimit?: number } | null,
     });
     const dir = writeStack(project.ref, { composeYaml, env });
     await getComposeRunner().up(dir, name(project.ref));

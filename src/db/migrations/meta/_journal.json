@@ -176,6 +176,13 @@
       "when": 1781211136083,
       "tag": "0024_workable_killer_shrike",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1781211679617,
+      "tag": "0025_exotic_retro_girl",
+      "breakpoints": true
     }
   ]
 }

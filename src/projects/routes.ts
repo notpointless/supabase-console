@@ -553,6 +553,30 @@ projects.delete("/api/v1/projects/:ref/third-party-auth/:id", async (c) => {
   return c.json({ deleted: true });
 });
 
+// [console fork] Storage settings overrides (the Storage settings page). Stored on the project
+// so buildStack can apply the upload size limit (FILE_SIZE_LIMIT) to the storage container.
+// PATCH merges + reconfigures async (same pattern as auth-config).
+projects.get("/api/v1/projects/:ref/storage-config", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  return c.json((row.storageConfig ?? {}) as Record<string, unknown>);
+});
+
+projects.patch("/api/v1/projects/:ref/storage-config", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const merged = { ...((row.storageConfig ?? {}) as Record<string, unknown>), ...(body ?? {}) };
+  await db.update(project).set({ storageConfig: merged, updatedAt: new Date() }).where(eq(project.id, row.id));
+  if (row.status === "active") await getQueue().enqueue("reconfigure", { ref });
+  return c.json(merged);
+});
+
 // Logical database backups (pg_dump). List + create-now.
 projects.get("/api/v1/projects/:ref/backups", async (c) => {
   await requireSession(c);

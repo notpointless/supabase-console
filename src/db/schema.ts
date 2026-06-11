@@ -36,6 +36,9 @@ export const project = pgTable("project", {
   // { serviceId, serviceName, nlbArn, targetGroupArns, status }. Provisioned lazily when the
   // first account is allowlisted; null = not provisioned.
   privatelink: jsonb("privatelink"),
+  // [console fork] Storage settings overrides (file size limit + feature toggles). fileSizeLimit
+  // is applied to the storage container (FILE_SIZE_LIMIT) on (re)configure; null = stack default.
+  storageConfig: jsonb("storage_config"),
   kongHttpPort: integer("kong_http_port"),
   kongHttpsPort: integer("kong_https_port"),
   dbPort: integer("db_port"),
