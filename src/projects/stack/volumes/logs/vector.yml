@@ -30,13 +30,16 @@ transforms:
     inputs:
       - project_logs
     route:
-      kong: 'contains(string!(.appname), "kong") || contains(string!(.appname), "envoy")'
-      auth: 'contains(string!(.appname), "auth")'
-      rest: 'contains(string!(.appname), "rest")'
-      realtime: 'contains(string!(.appname), "realtime")'
-      storage: 'contains(string!(.appname), "storage")'
-      functions: 'contains(string!(.appname), "edge-functions")'
-      db: 'contains(string!(.appname), "db")'
+      # Containers are named sb-<ref>-<service>-1. Match the "-<service>-" segment so a
+      # project ref that happens to contain a service keyword can't mis-route (refs have no
+      # dashes). The previous "edge-functions" match never fired (the container is "functions").
+      kong: 'contains(string!(.appname), "-kong-") || contains(string!(.appname), "-envoy-")'
+      auth: 'contains(string!(.appname), "-auth-")'
+      rest: 'contains(string!(.appname), "-rest-")'
+      realtime: 'contains(string!(.appname), "-realtime-")'
+      storage: 'contains(string!(.appname), "-storage-")'
+      functions: 'contains(string!(.appname), "-functions-")'
+      db: 'contains(string!(.appname), "-db-")'
   # Ignores non nginx errors since they are related with kong booting up
   kong_logs:
     type: remap

@@ -29,6 +29,7 @@ import { db } from "../db/client";
 import { eq, and } from "drizzle-orm";
 import { getQueue } from "../jobs/queue";
 import { listBackups, createBackup, backupFilePath, restoreBackup } from "./backups";
+import { queryProjectAnalytics } from "./analytics";
 import { listFunctionSecrets, setFunctionSecrets, deleteFunctionSecrets } from "./function-secrets";
 import { getRealtimeConfig, updateRealtimeConfig } from "./realtime-config";
 import {
@@ -485,6 +486,33 @@ projects.get("/api/v1/projects/:ref/internal-config", async (c) => {
     infrastructureType: row.infrastructureType,
   });
 });
+
+// [console fork] Analytics proxy — the dashboard's report/log graphs query the project's own
+// Logflare through here. The studio BFF builds the endpoint name + params (sql / interval /
+// timestamps) and we forward to Logflare with the project's private token (held server-side,
+// never exposed). Same authorization as every project route (org membership).
+async function handleAnalyticsQuery(c: any) {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  const secrets = await getProjectSecrets(row.id);
+  if (!secrets) throw new AppError(404, "project_secrets_not_found", "Project secrets not found");
+  // Merge query params with a JSON body (the logs explorer POSTs sql + timestamps, which can be
+  // large). Body wins for overlapping keys.
+  const params = { ...(c.req.query() as Record<string, string | undefined>) };
+  if (c.req.method === "POST") {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(body ?? {})) {
+      if (v !== null && v !== undefined) params[k] = String(v);
+    }
+  }
+  const { status, body } = await queryProjectAnalytics(row, secrets.jwtSecret, c.req.param("name"), params);
+  return c.json(body as any, status as any);
+}
+projects.get("/api/v1/projects/:ref/analytics/query/:name", handleAnalyticsQuery);
+projects.post("/api/v1/projects/:ref/analytics/query/:name", handleAnalyticsQuery);
 
 // [console fork] Per-project GoTrue auth-config (the Authentication settings pages).
 // Supabase keeps this in its platform DB; we store it on the project so buildStack can apply
