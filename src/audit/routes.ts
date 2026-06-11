@@ -6,6 +6,7 @@ import { auditLog } from "../db/schema";
 import { requireSession, requirePermission } from "../http/guards";
 import { AppError } from "../http/error";
 import { listDrains, createDrain, updateDrain, deleteDrain, testDrain } from "./drains";
+import { assertPublicHttpsUrl } from "../http/url-guard";
 
 export const auditRoutes = new Hono();
 
@@ -85,6 +86,9 @@ auditRoutes.post("/api/v1/organizations/:orgId/audit-log-drains", async (c) => {
   await requirePermission(c, orgId, OWNER_ADMIN);
   const parsed = createDrainSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) throw new AppError(400, "validation_error", "Invalid drain payload", parsed.error.flatten());
+  // SSRF guard: the webhook URL must be a public https endpoint.
+  const newUrl = (parsed.data.config as Record<string, unknown>)?.url;
+  if (typeof newUrl === "string" && newUrl) assertPublicHttpsUrl(newUrl);
   return c.json(await createDrain(orgId, parsed.data as { name: string; description?: string; type?: string; config: Record<string, unknown> }), 201);
 });
 
@@ -93,6 +97,8 @@ auditRoutes.put("/api/v1/organizations/:orgId/audit-log-drains/:token", async (c
   const orgId = c.req.param("orgId");
   await requirePermission(c, orgId, OWNER_ADMIN);
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const cfgUrl = (body.config as Record<string, unknown> | undefined)?.url;
+  if (typeof cfgUrl === "string" && cfgUrl) assertPublicHttpsUrl(cfgUrl);
   const result = await updateDrain(c.req.param("token"), {
     name: typeof body.name === "string" ? body.name : undefined,
     description: typeof body.description === "string" ? body.description : undefined,

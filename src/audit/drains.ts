@@ -2,6 +2,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../db/client";
 import { auditLogDrain } from "../db/schema";
 import type { AuditLogDrain } from "../db/schema";
+import { isPublicHttpsUrl } from "../http/url-guard";
 
 export interface AuditEvent {
   actor_user_id: string | null;
@@ -77,6 +78,11 @@ async function postToWebhook(
 ): Promise<{ ok: boolean; status?: number; error?: string }> {
   const url = typeof config.url === "string" ? config.url : "";
   if (!url) return { ok: false, error: "Drain has no URL configured" };
+  // [console fork] SSRF guard: a tenant admin configures this URL, so the control plane must not
+  // POST audit events to its own internal network / the metadata endpoint.
+  if (!isPublicHttpsUrl(url)) {
+    return { ok: false, error: "Drain URL must be a public https endpoint" };
+  }
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (config.headers && typeof config.headers === "object") {
     for (const [k, v] of Object.entries(config.headers as Record<string, unknown>)) {

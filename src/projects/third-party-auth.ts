@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { project, type Project } from "../db/schema";
 import { AppError } from "../http/error";
+import { assertPublicHttpsUrl } from "../http/url-guard";
 
 // [console fork] Third-Party Auth: register external JWT issuers (Firebase, Auth0, Cognito,
 // any OIDC provider) so the project's data API will VERIFY tokens they sign. Supabase stores
@@ -38,36 +39,6 @@ interface TpaInput {
   custom_jwks?: unknown;
 }
 
-// [console fork] SSRF guard for fetching operator-supplied issuer/JWKS URLs: require https and
-// reject loopback, link-local (incl. the 169.254.169.254 cloud-metadata endpoint), and private
-// IP literals. A project member supplies these URLs, so without this they could make the control
-// plane fetch internal services or steal instance IAM creds. (DNS-rebinding via a public host
-// that resolves to a private IP is a known residual; the high-value literals are blocked.)
-function assertSafeFetchUrl(raw: string): void {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    throw new AppError(400, "invalid_url", "Invalid URL");
-  }
-  if (u.protocol !== "https:") {
-    throw new AppError(400, "insecure_url", "Issuer and JWKS URLs must use https");
-  }
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  const isIpv6 = host.includes(":");
-  const blocked =
-    host === "localhost" ||
-    host.endsWith(".localhost") ||
-    (isIpv6 &&
-      (host === "::1" || host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd"))) ||
-    /^(127\.|10\.|169\.254\.|0\.)/.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host);
-  if (blocked) {
-    throw new AppError(400, "blocked_host", "That host is not allowed");
-  }
-}
-
 // Resolve the issuer's JWKS: an inline custom JWKS wins; else a direct JWKS URL; else OIDC
 // discovery from the issuer URL. Returns the verify key set to merge into the stack.
 async function resolveJwks(input: TpaInput): Promise<{ keys: unknown[] }> {
@@ -80,7 +51,7 @@ async function resolveJwks(input: TpaInput): Promise<{ keys: unknown[] }> {
   let jwksUrl = input.jwks_url;
   if (!jwksUrl && input.oidc_issuer_url) {
     const disc = input.oidc_issuer_url.replace(/\/+$/, "") + "/.well-known/openid-configuration";
-    assertSafeFetchUrl(disc);
+    assertPublicHttpsUrl(disc);
     const r = await fetch(disc).catch(() => null);
     const j = r && r.ok ? ((await r.json().catch(() => null)) as { jwks_uri?: string } | null) : null;
     jwksUrl = j?.jwks_uri;
@@ -93,7 +64,7 @@ async function resolveJwks(input: TpaInput): Promise<{ keys: unknown[] }> {
   }
 
   // Validate even a discovery-supplied jwks_uri (a hostile issuer could point it inward).
-  assertSafeFetchUrl(jwksUrl);
+  assertPublicHttpsUrl(jwksUrl);
   const r = await fetch(jwksUrl).catch(() => null);
   if (!r || !r.ok) throw new AppError(400, "jwks_fetch_failed", `Could not fetch the JWKS from ${jwksUrl}`);
   const j = (await r.json().catch(() => null)) as { keys?: unknown } | null;
