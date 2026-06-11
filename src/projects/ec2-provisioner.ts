@@ -398,6 +398,17 @@ export class Ec2Provisioner implements Provisioner {
     // connection to persist — otherwise the project (and its internal-config endpoint) point
     // at the dead host after a pause/resume.
     const host = await this.waitForPublicHost(ec2, instanceId);
+    // [console fork] The instance's public IP also changed, so the stack's own .env
+    // (API_EXTERNAL_URL / SITE_URL / SUPABASE_PUBLIC_URL) is now stale — GoTrue redirects,
+    // email links and the API external URL would point at the dead IP. Re-apply the stack so it
+    // re-resolves the new IP (and picks up any config edited while paused). Best-effort: the
+    // instance is up regardless, and a stale .env can be fixed by a later reconfigure.
+    try {
+      await this.reconfigure(project);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`[ec2 resume] reconfigure failed for ${project.ref}:`, e instanceof Error ? e.message : e);
+    }
     return {
       host,
       apiUrl: `http://${host}:8000`,
@@ -477,6 +488,14 @@ docker compose up -d`;
     );
     await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
     const host = await this.waitForPublicHost(ec2, instanceId);
+    // [console fork] Compute resize stops/starts the instance, so the public IP changed — like
+    // resume, re-apply the stack so its .env points at the new host instead of the dead one.
+    try {
+      await this.reconfigure(project);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`[ec2 resize] reconfigure failed for ${project.ref}:`, e instanceof Error ? e.message : e);
+    }
     return {
       host,
       apiUrl: `http://${host}:8000`,
