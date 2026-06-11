@@ -21,29 +21,37 @@ function ec2Host(project: Project): string {
   return host;
 }
 
-// Build the `docker` argv for pg_dump (shared: exec into the container; EC2: run a client
-// container that connects to the instance over TCP).
-function pgDumpArgs(project: Project): string[] {
+// Build the `docker` invocation for pg_dump (shared: exec into the container; EC2: run a
+// client container that connects to the instance over TCP). The DB password is passed via
+// the spawned process's ENVIRONMENT with docker's `-e PGPASSWORD` inherit form — embedding
+// `PGPASSWORD=<value>` in argv would expose it in the host's process list.
+function pgDumpCmd(project: Project): { args: string[]; env?: Record<string, string> } {
   if (project.infrastructureType === "shared") {
-    return ["exec", `sb-${project.ref}-db-1`, "pg_dump", "-U", "postgres", "-Fc", "postgres"];
+    return { args: ["exec", `sb-${project.ref}-db-1`, "pg_dump", "-U", "postgres", "-Fc", "postgres"] };
   }
-  return [
-    "run", "--rm", "-e", `PGPASSWORD=${decrypt(project.dbPasswordEncrypted)}`, PG_CLIENT_IMAGE,
-    "pg_dump", "-h", ec2Host(project), "-p", "5432", "-U", "postgres", "-Fc", "postgres",
-  ];
+  return {
+    args: [
+      "run", "--rm", "-e", "PGPASSWORD", PG_CLIENT_IMAGE,
+      "pg_dump", "-h", ec2Host(project), "-p", "5432", "-U", "postgres", "-Fc", "postgres",
+    ],
+    env: { PGPASSWORD: decrypt(project.dbPasswordEncrypted) },
+  };
 }
 
-// Build the `docker` argv for pg_restore (reads the dump on stdin).
-function pgRestoreArgs(project: Project): string[] {
+// Build the `docker` invocation for pg_restore (reads the dump on stdin).
+function pgRestoreCmd(project: Project): { args: string[]; env?: Record<string, string> } {
   const restore = ["pg_restore", "-U", "postgres", "-d", "postgres", "--clean", "--if-exists", "--no-owner", "--no-acl"];
   if (project.infrastructureType === "shared") {
-    return ["exec", "-i", `sb-${project.ref}-db-1`, ...restore];
+    return { args: ["exec", "-i", `sb-${project.ref}-db-1`, ...restore] };
   }
-  return [
-    "run", "--rm", "-i", "-e", `PGPASSWORD=${decrypt(project.dbPasswordEncrypted)}`, PG_CLIENT_IMAGE,
-    "pg_restore", "-h", ec2Host(project), "-p", "5432", "-U", "postgres", "-d", "postgres",
-    "--clean", "--if-exists", "--no-owner", "--no-acl",
-  ];
+  return {
+    args: [
+      "run", "--rm", "-i", "-e", "PGPASSWORD", PG_CLIENT_IMAGE,
+      "pg_restore", "-h", ec2Host(project), "-p", "5432", "-U", "postgres", "-d", "postgres",
+      "--clean", "--if-exists", "--no-owner", "--no-acl",
+    ],
+    env: { PGPASSWORD: decrypt(project.dbPasswordEncrypted) },
+  };
 }
 
 export interface BackupInfo {
@@ -91,7 +99,8 @@ export async function createBackup(project: Project): Promise<BackupInfo> {
 
   await new Promise<void>((resolve, reject) => {
     const out = createWriteStream(file);
-    const child = spawn("docker", pgDumpArgs(project));
+    const cmd = pgDumpCmd(project);
+    const child = spawn("docker", cmd.args, { env: { ...process.env, ...cmd.env } });
     let stderr = "";
     child.stdout.pipe(out);
     child.stderr.on("data", (d) => (stderr += d.toString()));
@@ -120,7 +129,8 @@ export async function restoreBackup(project: Project, id: number): Promise<void>
   if (!file) throw new Error("Backup not found");
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("docker", pgRestoreArgs(project));
+    const cmd = pgRestoreCmd(project);
+    const child = spawn("docker", cmd.args, { env: { ...process.env, ...cmd.env } });
     let stderr = "";
     child.stderr.on("data", (d) => (stderr += d.toString()));
     child.on("error", reject);
