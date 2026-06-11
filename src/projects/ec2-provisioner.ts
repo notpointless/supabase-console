@@ -752,6 +752,14 @@ docker compose -f docker-compose.yml -f docker-compose.logs.yml up -d`;
     } catch {
       // best-effort EIP cleanup
     }
+    // [console fork] Delete the project's EBS snapshots (physical backups) so they don't
+    // keep billing after the project is gone. Best-effort — never block the delete.
+    try {
+      const { deleteAllPhysicalBackups } = await import("./physical-backups.js");
+      await deleteAllPhysicalBackups(project);
+    } catch {
+      // best-effort snapshot cleanup
+    }
     await deleteInstanceRole(iamClientFor(creds), project.ref);
   }
 }

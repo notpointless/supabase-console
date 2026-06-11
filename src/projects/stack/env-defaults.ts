@@ -15,14 +15,8 @@ export const STACK_ENV_DEFAULTS: Record<string, string> = {
 
   // Analytics / Logflare tokens (operator must override).
   // NOTE: analytics (Logflare) and vector services are not included in the current vendored
-  // compose; these tokens are retained for operator opt-in and forward compatibility so a
-  // future stack update can enable them without a schema change here.
-  LOGFLARE_PUBLIC_ACCESS_TOKEN: "your-super-secret-and-long-logflare-key-public",
-  LOGFLARE_PRIVATE_ACCESS_TOKEN: "your-super-secret-and-long-logflare-key-private",
-
-  // S3 protocol access (defaults from official example)
-  S3_PROTOCOL_ACCESS_KEY_ID: "625729a08b95bf1b7ff351a663f3a23c",
-  S3_PROTOCOL_ACCESS_KEY_SECRET: "850181e4652dd023b7a98c58ae0d2d34bd487ee0cc3254aed6eda37307425907",
+  // Logflare + S3-protocol credentials are NOT defaulted here — the upstream example values are
+  // publicly known, so compose.ts derives per-project values from the project's JWT secret.
 
   // Database
   POSTGRES_HOST: "db",

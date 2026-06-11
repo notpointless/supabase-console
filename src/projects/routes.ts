@@ -29,6 +29,7 @@ import { db } from "../db/client";
 import { eq, and } from "drizzle-orm";
 import { getQueue } from "../jobs/queue";
 import { listBackups, createBackup, backupFilePath, restoreBackup } from "./backups";
+import { listPhysicalBackups, createPhysicalBackup, physicalBackupData } from "./physical-backups";
 import { queryProjectAnalytics } from "./analytics";
 import { listFunctionSecrets, setFunctionSecrets, deleteFunctionSecrets } from "./function-secrets";
 import { getRealtimeConfig, updateRealtimeConfig } from "./realtime-config";
@@ -686,20 +687,58 @@ projects.delete("/api/v1/projects/:ref/functions/:slug", async (c) => {
   return c.json({ ok: true });
 });
 
-// Logical database backups (pg_dump). List + create-now.
+// Database backups: logical (pg_dump, all projects) + physical (EBS snapshots, EC2 only).
 projects.get("/api/v1/projects/:ref/backups", async (c) => {
   await requireSession(c);
   const ref = c.req.param("ref");
   const row = await getProjectByRef(ref);
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, row.organizationId, { project: ["content"] });
+  const physical = await listPhysicalBackups(row);
   return c.json({
-    backups: listBackups(ref),
+    backups: [...physical, ...listBackups(ref)].sort((a, b) => b.id - a.id),
     region: row.region ?? "shared",
     walg_enabled: false,
     pitr_enabled: false,
-    physicalBackupData: {},
+    // Physical backups are an EC2 capability; "enabled" once the first snapshot exists.
+    physicalBackupsEnabled: physical.length > 0,
+    physicalBackupsAvailable: row.infrastructureType !== "shared",
+    physicalBackupData: physicalBackupData(physical),
   });
+});
+
+// Enable physical backups (EC2): take the first EBS snapshot now. The daily backup job keeps
+// snapshotting projects that have at least one (with retention pruning). Clear 400 for shared.
+projects.post("/api/v1/projects/:ref/backups/enable-physical", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const backup = await createPhysicalBackup(row);
+  return c.json(backup);
+});
+
+// Restore a physical backup (EC2): swap the root volume for one built from the snapshot.
+// Runs as a background job (the volume swap takes minutes); the project shows RESTORING.
+projects.post("/api/v1/projects/:ref/backups/:id/restore-physical", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  if (row.infrastructureType === "shared") {
+    throw new AppError(400, "physical_backups_unavailable", "Physical backups are only available for dedicated (AWS EC2) projects.");
+  }
+  if (row.status !== "active" && row.status !== "paused") {
+    throw new AppError(409, "project_busy", `Project is ${row.status}; wait for it to settle before restoring`);
+  }
+  await db
+    .update(project)
+    .set({ status: "resuming", updatedAt: new Date() })
+    .where(eq(project.id, row.id));
+  await getQueue().enqueue("restore_physical", { ref, id: Number(c.req.param("id")) });
+  return c.json({ ok: true, status: "restoring" });
 });
 
 projects.post("/api/v1/projects/:ref/backups", async (c) => {
@@ -710,6 +749,11 @@ projects.post("/api/v1/projects/:ref/backups", async (c) => {
   await requirePermission(c, row.organizationId, { project: ["update"] });
   try {
     const backup = await createBackup(row);
+    // Dedicated projects also get an EBS snapshot (their physical backup) — the logical dump
+    // covers data-level restore, the snapshot covers full-volume restore. Best-effort.
+    if (row.infrastructureType !== "shared") {
+      await createPhysicalBackup(row).catch(() => {});
+    }
     return c.json(backup);
   } catch (e) {
     throw new AppError(500, "backup_failed", e instanceof Error ? e.message : "Backup failed");

@@ -165,10 +165,41 @@ export const taskList = {
       // best-effort; surfaced via manual deploy if it fails here
     }
   },
+  // [console fork] Restore an EC2 project's root volume from an EBS snapshot (physical backup).
+  // The route flips status to "resuming" (RESTORING in the dashboard) before enqueueing; we put
+  // it back to active on success. The volume swap stops/starts the instance, so reconfigure
+  // afterwards to refresh the stack env on the restored volume (which may carry stale config).
+  restore_physical: async (payload: unknown): Promise<void> => {
+    const { ref, id } = payload as { ref: string; id: number };
+    const row = await loadByRef(ref);
+    if (!row) return;
+    if (row.status !== "resuming") return;
+    const { restorePhysicalBackup } = await import("../projects/physical-backups.js");
+    try {
+      await restorePhysicalBackup(row, id);
+      try {
+        await getProvisionerFor(row).reconfigure?.(row);
+      } catch {
+        // instance is up on the restored volume regardless; a later reconfigure fixes env drift
+      }
+      await db
+        .update(project)
+        .set({ status: "active", failureReason: null, updatedAt: new Date() })
+        .where(eq(project.ref, ref));
+    } catch (e) {
+      await db
+        .update(project)
+        .set({ status: "failed", failureReason: e instanceof Error ? e.message : "physical restore failed", updatedAt: new Date() })
+        .where(eq(project.ref, ref));
+    }
+  },
   // [console fork] Daily logical backup of every active shared-infra project
   // (scheduled via the worker crontab). Best-effort per project.
   backup_all: async (): Promise<void> => {
     const { createBackup } = await import("../projects/backups.js");
+    const { listPhysicalBackups, createPhysicalBackup, prunePhysicalBackups } = await import(
+      "../projects/physical-backups.js"
+    );
     // [console fork] All active projects — shared (local container) AND dedicated/EC2 (dumped
     // over TCP from the instance). createBackup picks the right path per infra.
     const rows = await db.select().from(project).where(eq(project.status, "active"));
@@ -177,6 +208,19 @@ export const taskList = {
         await createBackup(row);
       } catch {
         // best-effort; a failed backup for one project shouldn't stop the rest
+      }
+      // EC2 projects that opted into physical backups (>=1 snapshot) get a daily snapshot too,
+      // pruned to the retention window.
+      if (row.infrastructureType !== "shared") {
+        try {
+          const existing = await listPhysicalBackups(row);
+          if (existing.length > 0) {
+            await createPhysicalBackup(row);
+            await prunePhysicalBackups(row);
+          }
+        } catch {
+          // best-effort
+        }
       }
     }
   },

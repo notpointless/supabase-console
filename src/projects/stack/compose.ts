@@ -115,6 +115,16 @@ export async function buildStack(
       .update("logflare_private_v1")
       .digest("hex"),
     DOCKER_SOCKET_LOCATION: "/var/run/docker.sock",
+    // S3-protocol credentials for the storage service's S3-compatible endpoint. The upstream
+    // .env.example ships fixed, publicly-known values — leaving those in place would let anyone
+    // access any project's storage over /storage/v1/s3. Derive per-project instead.
+    S3_PROTOCOL_ACCESS_KEY_ID: createHmac("sha256", input.secrets.jwtSecret)
+      .update("s3_protocol_key_id_v1")
+      .digest("hex")
+      .slice(0, 32),
+    S3_PROTOCOL_ACCESS_KEY_SECRET: createHmac("sha256", input.secrets.jwtSecret)
+      .update("s3_protocol_key_secret_v1")
+      .digest("hex"),
   };
 
   // Data API disabled: don't expose the user's `public` schema over REST.
