@@ -32,6 +32,10 @@ export const project = pgTable("project", {
   // resolved_jwks }. The resolved issuer JWKS is merged into the stack's verify keys so the
   // data API accepts those tokens. null/[] = none.
   thirdPartyAuth: jsonb("third_party_auth"),
+  // [console fork] AWS PrivateLink endpoint-service metadata (dedicated/EC2 only):
+  // { serviceId, serviceName, nlbArn, targetGroupArns, status }. Provisioned lazily when the
+  // first account is allowlisted; null = not provisioned.
+  privatelink: jsonb("privatelink"),
   kongHttpPort: integer("kong_http_port"),
   kongHttpsPort: integer("kong_https_port"),
   dbPort: integer("db_port"),

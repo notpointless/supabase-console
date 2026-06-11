@@ -307,7 +307,10 @@ integrations.get("/api/v1/projects/:ref/privatelink/accounts", async (c) => {
     .from(projectPrivatelinkAccount)
     .where(eq(projectPrivatelinkAccount.projectId, project.id));
 
-  return c.json({ accounts: rows });
+  return c.json({
+    accounts: rows,
+    serviceName: (project.privatelink as { serviceName?: string } | null)?.serviceName ?? null,
+  });
 });
 
 // POST /api/v1/projects/:ref/privatelink/accounts
@@ -346,10 +349,31 @@ integrations.post("/api/v1/projects/:ref/privatelink/accounts", async (c) => {
     .values({ projectId: project.id, awsAccountId })
     .returning();
 
+  // [console fork] Provision (or extend) the AWS endpoint service for dedicated projects and
+  // allow this account. Best-effort: the account is stored regardless; on success we mark it
+  // active and surface the service name for the customer to connect to.
+  let serviceName: string | null = (project.privatelink as { serviceName?: string } | null)?.serviceName ?? null;
+  if (project.infrastructureType === "dedicated_ec2") {
+    try {
+      const { ensurePrivatelinkService, addAllowedPrincipal } = await import("./privatelink-service.js");
+      const meta = await ensurePrivatelinkService(project);
+      await addAllowedPrincipal(project, meta, awsAccountId);
+      await db
+        .update(projectPrivatelinkAccount)
+        .set({ status: "active" })
+        .where(eq(projectPrivatelinkAccount.id, inserted!.id));
+      serviceName = meta.serviceName;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`[privatelink] provision failed for ${ref}:`, e instanceof Error ? e.message : e);
+    }
+  }
+
   return c.json({
     id: inserted!.id,
     awsAccountId: inserted!.awsAccountId,
-    status: inserted!.status,
+    status: serviceName ? "active" : inserted!.status,
+    serviceName,
   });
 });
 
@@ -364,7 +388,7 @@ integrations.delete("/api/v1/projects/:ref/privatelink/accounts/:id", async (c) 
   await requirePermission(c, project.organizationId, OWNER_ADMIN);
 
   const [row] = await db
-    .select({ id: projectPrivatelinkAccount.id })
+    .select({ id: projectPrivatelinkAccount.id, awsAccountId: projectPrivatelinkAccount.awsAccountId })
     .from(projectPrivatelinkAccount)
     .where(
       and(
@@ -377,6 +401,18 @@ integrations.delete("/api/v1/projects/:ref/privatelink/accounts/:id", async (c) 
   await db
     .delete(projectPrivatelinkAccount)
     .where(eq(projectPrivatelinkAccount.id, id));
+
+  // [console fork] Revoke the account on the AWS endpoint service (best-effort; no-op if the
+  // service was never provisioned, e.g. shared infra).
+  if (project.infrastructureType === "dedicated_ec2") {
+    try {
+      const { removeAllowedPrincipal } = await import("./privatelink-service.js");
+      await removeAllowedPrincipal(project, row.awsAccountId);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`[privatelink] revoke failed for ${ref}:`, e instanceof Error ? e.message : e);
+    }
+  }
 
   return c.json({ ok: true });
 });

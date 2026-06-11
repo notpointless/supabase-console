@@ -169,6 +169,13 @@
       "when": 1781208073731,
       "tag": "0023_clear_sway",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1781211136083,
+      "tag": "0024_workable_killer_shrike",
+      "breakpoints": true
     }
   ]
 }

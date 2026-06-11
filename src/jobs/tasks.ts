@@ -109,6 +109,9 @@ export const taskList = {
     if (!row) return;
     try {
       await getProvisionerFor(row).delete(row);
+      // [console fork] Tear down the PrivateLink endpoint service + NLB if one was provisioned.
+      const { teardownPrivatelink } = await import("../integrations/privatelink-service.js");
+      await teardownPrivatelink(row).catch(() => {});
       await db.delete(project).where(eq(project.ref, ref));
     } catch (e) {
       await db
