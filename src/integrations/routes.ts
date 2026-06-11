@@ -280,9 +280,10 @@ integrations.delete("/api/v1/projects/:ref/connections/:id", async (c) => {
 // ---------------------------------------------------------------------------
 // AWS PrivateLink — allowed AWS account IDs (per project)
 //
-// NOTE: Actual VPC endpoint-service provisioning is DEFERRED.
-//       These routes manage the account allowlist only.
-//       status is always "pending" until provisioning is implemented.
+// Adding the first account provisions the real VPC endpoint service (NLB +
+// endpoint-service, see privatelink-service.ts) and allowlists each account
+// as a principal; teardown runs on project delete. EC2-only — the endpoint
+// service fronts the project's instance.
 // ---------------------------------------------------------------------------
 
 const awsAccountIdSchema = z.object({

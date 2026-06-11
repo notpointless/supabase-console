@@ -119,7 +119,7 @@ export async function resizeProject(ref: string, computeSize: string): Promise<v
   const row = await getProjectByRef(ref);
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   if (row.infrastructureType === "shared") {
-    throw new AppError(400, "not_dedicated", "Compute size only applies to dedicated projects");
+    throw new AppError(400, "not_dedicated", "Compute resize is only available for dedicated (AWS EC2) projects");
   }
   const size = MIN_DEDICATED_COMPUTE.has(computeSize) ? computeSize : "medium";
   await db.update(project).set({ computeSize: size, updatedAt: new Date() }).where(eq(project.ref, ref));
@@ -142,7 +142,7 @@ export async function getProjectDisk(ref: string) {
   const row = await getProjectByRef(ref);
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   if (row.infrastructureType === "shared") {
-    throw new AppError(400, "not_dedicated", "Disk settings only apply to dedicated projects");
+    throw new AppError(400, "not_dedicated", "Disk settings are only available for dedicated (AWS EC2) projects");
   }
   const p = getProvisionerFor(row);
   if (!p.getDiskConfig) throw new AppError(400, "unsupported", "Disk config not supported");
@@ -157,7 +157,7 @@ export async function resizeProjectDisk(
   const row = await getProjectByRef(ref);
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   if (row.infrastructureType === "shared") {
-    throw new AppError(400, "not_dedicated", "Disk settings only apply to dedicated projects");
+    throw new AppError(400, "not_dedicated", "Disk settings are only available for dedicated (AWS EC2) projects");
   }
   const p = getProvisionerFor(row);
   if (!p.resizeDisk) throw new AppError(400, "unsupported", "Disk resize not supported");

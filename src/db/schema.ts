@@ -189,10 +189,10 @@ export const projectRepoConnection = pgTable("project_repo_connection", {
 });
 
 // ---------------------------------------------------------------------------
-// AWS PrivateLink: per-project list of allowed AWS account IDs.
-// NOTE: Actual VPC endpoint-service provisioning is DEFERRED.
-//       This table is the account allowlist only; status "pending" until
-//       provisioning is implemented.
+// AWS PrivateLink: per-project list of allowed AWS account IDs. Adding the
+// first account provisions the VPC endpoint service (privatelink-service.ts);
+// each row is allowlisted as a principal. status: pending -> active once the
+// principal is registered on the endpoint service.
 // ---------------------------------------------------------------------------
 export const projectPrivatelinkAccount = pgTable(
   "project_privatelink_account",
@@ -202,7 +202,7 @@ export const projectPrivatelinkAccount = pgTable(
       .notNull()
       .references(() => project.id, { onDelete: "cascade" }),
     awsAccountId: text("aws_account_id").notNull(),
-    status: text("status").notNull().default("pending"), // pending | active (provisioning deferred)
+    status: text("status").notNull().default("pending"), // pending | active
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [unique("project_privatelink_account_project_id_aws_account_id_uniq").on(t.projectId, t.awsAccountId)],
