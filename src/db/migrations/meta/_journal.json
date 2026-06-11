@@ -183,6 +183,20 @@
       "when": 1781211679617,
       "tag": "0025_exotic_retro_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1781215052279,
+      "tag": "0026_tricky_richard_fisk",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1781215132760,
+      "tag": "0027_stormy_talon",
+      "breakpoints": true
     }
   ]
 }

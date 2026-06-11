@@ -41,6 +41,7 @@ import {
 import { readFileSync } from "node:fs";
 import { listBranches, createBranch, getBranchById, deleteBranch, resetBranch, mapBranch, branchSchemaDiff } from "./branches";
 import { listThirdPartyAuth, addThirdPartyAuth, deleteThirdPartyAuth } from "./third-party-auth";
+import { listFunctions, getFunction, getFunctionFiles, deployFunction, deleteFunction } from "./functions";
 import { mergeBranchToProduction } from "../integrations/github-deploy";
 import { readStandbyKeys, addStandbyKey, removeStandbyKey, setStandbyKeyStatus } from "./signing-keys-store";
 import { assertMfaCompliant } from "../auth/mfa";
@@ -575,6 +576,75 @@ projects.patch("/api/v1/projects/:ref/storage-config", async (c) => {
   await db.update(project).set({ storageConfig: merged, updatedAt: new Date() }).where(eq(project.id, row.id));
   if (row.status === "active") await getQueue().enqueue("reconfigure", { ref });
   return c.json(merged);
+});
+
+// [console fork] Edge functions — read/deploy/delete the project's functions volume (the
+// edge-runtime serves it). Infra-aware (local fs for shared, SSM for EC2). The /files endpoint
+// returns JSON; the studio BFF adapts it to the multipart shape the function editor expects.
+projects.get("/api/v1/projects/:ref/functions", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  return c.json(await listFunctions(row));
+});
+
+// Deploy (create/overwrite). Slug in the query (?slug=), body { file: [{name,content}], metadata }.
+projects.post("/api/v1/projects/:ref/functions/deploy", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const slug = c.req.query("slug") ?? "";
+  const body = (await c.req.json().catch(() => ({}))) as {
+    file?: Array<{ name: string; content: string }>;
+    metadata?: Record<string, unknown>;
+  };
+  const created = await deployFunction(row, slug, body.file ?? [], (body.metadata ?? {}) as any);
+  return c.json(created);
+});
+
+projects.get("/api/v1/projects/:ref/functions/:slug", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  const fn = await getFunction(row, c.req.param("slug"));
+  if (!fn) throw new AppError(404, "function_not_found", "Function not found");
+  return c.json(fn);
+});
+
+// Source files as JSON (the BFF turns this into multipart for the editor).
+projects.get("/api/v1/projects/:ref/functions/:slug/files", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  const fn = await getFunction(row, c.req.param("slug"));
+  if (!fn) throw new AppError(404, "function_not_found", "Function not found");
+  return c.json({ files: await getFunctionFiles(row, c.req.param("slug")), metadata: fn });
+});
+
+// Patch metadata (name / verify_jwt) — re-write keeping the existing files.
+projects.patch("/api/v1/projects/:ref/functions/:slug", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const slug = c.req.param("slug");
+  const files = await getFunctionFiles(row, slug);
+  if (files.length === 0) throw new AppError(404, "function_not_found", "Function not found");
+  const patch = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  return c.json(await deployFunction(row, slug, files, patch as any));
+});
+
+projects.delete("/api/v1/projects/:ref/functions/:slug", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  await deleteFunction(row, c.req.param("slug"));
+  return c.json({ ok: true });
 });
 
 // Logical database backups (pg_dump). List + create-now.
