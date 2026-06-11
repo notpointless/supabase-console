@@ -219,6 +219,77 @@ function quote(s: string): string {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
+/** Supabase-style UTC migration version (YYYYMMDDHHMMSS). */
+function migrationVersion(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`;
+}
+
+/**
+ * Push a preview branch's schema changes back to its tracked Git branch: diff the
+ * branch's DB against its parent and commit the result as a new
+ * `supabase/migrations/<version>_<ref>.sql` file via the GitHub contents API. This is
+ * the inverse of the deploy flow (which applies repo migrations to a DB). Requires the
+ * branch to track a repo and an org GitHub token with `contents:write`.
+ */
+export async function pushBranchToGit(
+  branchId: string
+): Promise<{ repo: string; branch: string; file: string }> {
+  const [branch] = await db.select().from(project).where(eq(project.id, branchId));
+  if (!branch) throw new AppError(404, "branch_not_found", "Branch not found");
+  const [conn] = await db
+    .select()
+    .from(projectRepoConnection)
+    .where(eq(projectRepoConnection.projectId, branch.id));
+  if (!conn) {
+    throw new AppError(
+      400,
+      "branch_not_tracked",
+      "This branch isn't linked to a Git branch. Connect a repo to push its changes."
+    );
+  }
+  const token = await githubToken(branch.organizationId);
+  if (!token) {
+    throw new AppError(
+      400,
+      "no_github_token",
+      "Connect a GitHub account with write access to this repo before pushing."
+    );
+  }
+
+  // The branch's schema diff vs its parent — the migration we commit.
+  const { branchSchemaDiff } = await import("../projects/branches.js");
+  const diff = (await branchSchemaDiff(branch.id)).trim();
+  if (!diff) throw new AppError(400, "no_changes", "No schema changes to push.");
+
+  const { owner, repo } = parseRepo(conn.repoFullName);
+  const gitBranch = conn.branch ?? "main";
+  const safeRef = branch.ref.replace(/[^a-z0-9_]/gi, "_");
+  const file = `${migrationVersion()}_${safeRef}.sql`;
+  const path = `supabase/migrations/${file}`;
+  const body = `-- Pushed from preview branch ${branch.name} (${branch.ref})\n${diff}\n`;
+  const content = Buffer.from(body, "utf8").toString("base64");
+
+  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`, {
+    method: "PUT",
+    headers: { ...ghHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: `chore(db): migration from preview branch ${branch.name}`,
+      content,
+      branch: gitBranch,
+    }),
+  });
+  if (!res.ok) {
+    throw new AppError(
+      res.status === 401 || res.status === 403 ? 400 : 502,
+      "github_error",
+      `GitHub API ${res.status}: ${(await res.text()).slice(0, 200)}`
+    );
+  }
+  return { repo: conn.repoFullName, branch: gitBranch, file };
+}
+
 // --- repo connection management ---------------------------------------------
 
 export async function getRepoConnection(projectId: string) {

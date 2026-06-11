@@ -731,13 +731,16 @@ projects.post("/api/v1/branches/:id/merge", async (c) => {
   return c.json(result);
 });
 
-// Push (branch -> Git provider) needs write access to the repo; not implemented.
-// Respond gracefully so the dashboard shows a clear message rather than crashing.
+// Push a preview branch's schema changes back to its tracked Git branch as a new
+// supabase/migrations file (inverse of the deploy flow). Needs the branch linked to a
+// repo + an org GitHub token with contents:write.
 projects.post("/api/v1/branches/:id/push", async (c) => {
   await requireSession(c);
   const branch = await loadBranchForRequest(c);
   await requirePermission(c, branch.organizationId, { project: ["update"] });
-  throw new AppError(501, "not_implemented", "Branch push is not yet supported on self-host");
+  const { pushBranchToGit } = await import("../integrations/github-deploy");
+  const result = await pushBranchToGit(branch.id);
+  return c.json(result);
 });
 projects.get("/api/v1/branches/:id/diff", async (c) => {
   await requireSession(c);
