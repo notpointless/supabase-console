@@ -21,16 +21,24 @@ export interface BuildStackInput {
   authConfig?: Record<string, unknown> | null;
 }
 
-// [console fork] Keys an auth-config override may NEVER set — the DB/JWT/port/secret wiring.
-// A project member edits auth settings via the auth-config endpoint; this guarantees that
-// surface can't reach the stack's security-critical env even if the payload is hostile.
-const PROTECTED_ENV_KEYS = new Set([
-  "POSTGRES_PASSWORD", "JWT_SECRET", "ANON_KEY", "SERVICE_ROLE_KEY",
-  "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY", "ANON_KEY_ASYMMETRIC",
-  "SERVICE_ROLE_KEY_ASYMMETRIC", "JWT_KEYS", "JWT_JWKS", "SECRET_KEY_BASE",
-  "DASHBOARD_PASSWORD", "VAULT_ENC_KEY", "PG_META_CRYPTO_KEY",
-  "KONG_HTTP_PORT", "KONG_HTTPS_PORT", "POSTGRES_PORT", "POOLER_PROXY_PORT_TRANSACTION",
+// [console fork] An auth-config override may only set RECOGNISED GoTrue settings — an
+// allowlist, never a denylist. A project member edits these via the auth-config endpoint,
+// so anything unrecognised must be ignored: otherwise a hostile payload could set an infra
+// var the compose interpolates (e.g. POSTGRES_HOST → GOTRUE_DB_DATABASE_URL) and redirect
+// GoTrue's DB connection — leaking the real password — or clobber ports/keys. A denylist
+// can't enumerate every sensitive var; an allowlist is closed by construction.
+const AUTH_CONFIG_EXACT_KEYS = new Set([
+  "SITE_URL", "URI_ALLOW_LIST", "ADDITIONAL_REDIRECT_URLS", "DISABLE_SIGNUP", "JWT_EXP",
+  "OAUTH_SERVER_ENABLED", "OAUTH_SERVER_ALLOW_DYNAMIC_REGISTRATION",
 ]);
+// Families of GoTrue auth settings (GOTRUE_<KEY>); none collide with infra env.
+const AUTH_CONFIG_KEY_PREFIXES = [
+  "SECURITY_", "SESSIONS_", "PASSWORD_", "RATE_LIMIT_", "REFRESH_TOKEN_",
+  "MAILER_", "SMTP_", "SMS_", "MFA_", "HOOK_", "EXTERNAL_",
+];
+function isAuthConfigKey(key: string): boolean {
+  return AUTH_CONFIG_EXACT_KEYS.has(key) || AUTH_CONFIG_KEY_PREFIXES.some((p) => key.startsWith(p));
+}
 
 const BASE_PATH = join(dirname(fileURLToPath(import.meta.url)), "compose.base.yml");
 
@@ -94,10 +102,10 @@ export async function buildStack(
 
   // [console fork] Layer the project's saved auth-config overrides on top, so the
   // Authentication settings pages (signups, OAuth providers, the OAuth server, etc.)
-  // actually drive GoTrue. Bare keys map to GOTRUE_* in compose.base.yml. Infra-critical
-  // keys are skipped so this surface can never clobber DB/JWT/port wiring.
+  // actually drive GoTrue. Bare keys map to GOTRUE_* in compose.base.yml. Only recognised
+  // GoTrue settings are applied (allowlist) so this surface can never reach infra env.
   for (const [k, v] of Object.entries(input.authConfig ?? {})) {
-    if (PROTECTED_ENV_KEYS.has(k) || v === null || v === undefined) continue;
+    if (!isAuthConfigKey(k) || v === null || v === undefined) continue;
     env[k] = typeof v === "object" ? JSON.stringify(v) : String(v);
   }
 
