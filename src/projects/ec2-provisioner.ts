@@ -15,6 +15,11 @@ import {
   ModifyInstanceAttributeCommand,
   DescribeVolumesCommand,
   ModifyVolumeCommand,
+  AllocateAddressCommand,
+  AssociateAddressCommand,
+  DisassociateAddressCommand,
+  ReleaseAddressCommand,
+  DescribeAddressesCommand,
 } from "@aws-sdk/client-ec2";
 
 import { CloudWatchClient, GetMetricStatisticsCommand } from "@aws-sdk/client-cloudwatch";
@@ -307,8 +312,42 @@ export class Ec2Provisioner implements Provisioner {
     // Self-clean on any post-launch failure: the connection (with instanceId) isn't
     // persisted until we return, so the provision-task rollback can't see the instance
     // to terminate it. Terminate here so a failed provision never leaves an orphan.
+    let allocationId: string | undefined;
     try {
-      const host = await this.waitForPublicHost(ec2, instanceId);
+      // [console fork] Allocate + associate an Elastic IP so the public IP is STABLE across
+      // stop/start. Without it, pause/resume (and resize) hand the instance a NEW IP, which
+      // breaks the stack's own .env URLs, any custom hostname (the CNAME target), and saved
+      // connection strings. Associate ASAP (retry while pending) so the boot-time user-data
+      // resolves the EIP, not the ephemeral auto-assigned IP. Tagged so delete can reclaim it.
+      const eip = await ec2.send(
+        new AllocateAddressCommand({
+          Domain: "vpc",
+          TagSpecifications: [
+            {
+              ResourceType: "elastic-ip",
+              Tags: [
+                { Key: "supabase:project-ref", Value: project.ref },
+                { Key: "supabase:managed-by", Value: "supabase-console" },
+              ],
+            },
+          ],
+        })
+      );
+      allocationId = eip.AllocationId;
+      const host = eip.PublicIp;
+      if (!allocationId || !host) throw new Error("EC2 did not return an Elastic IP");
+      for (let i = 0; i < 15; i++) {
+        try {
+          await ec2.send(new AssociateAddressCommand({ InstanceId: instanceId, AllocationId: allocationId }));
+          break;
+        } catch (e) {
+          if (i < 14) {
+            await new Promise((r) => setTimeout(r, 3000));
+            continue;
+          }
+          throw e;
+        }
+      }
       // Don't return (and let the project flip to "active") until the data plane (kong)
       // actually responds — otherwise the dashboard lets the user in while the stack is
       // still pulling images and every data-plane call errors.
@@ -324,11 +363,15 @@ export class Ec2Provisioner implements Provisioner {
           ref: project.ref,
           // persisted in project.connection (jsonb) for lifecycle ops
           instanceId,
+          allocationId,
           region: project.region,
         } as Connection & { instanceId: string; region: string },
       };
     } catch (e) {
       await this.terminateWithRetry(ec2, instanceId).catch(() => {});
+      if (allocationId) {
+        await ec2.send(new ReleaseAddressCommand({ AllocationId: allocationId })).catch(() => {});
+      }
       await deleteInstanceRole(iam, project.ref).catch(() => {});
       throw e;
     }
@@ -644,6 +687,24 @@ docker compose up -d`;
       instanceId = out.Reservations?.[0]?.Instances?.[0]?.InstanceId;
     }
     if (instanceId) await this.terminateWithRetry(ec2, instanceId);
+    // [console fork] Release the project's Elastic IP so it doesn't leak (and keep billing).
+    // Find it by the project-ref tag (robust even if connection.allocationId was dropped on a
+    // resume); disassociate then release. Best-effort — never block the delete.
+    try {
+      const addrs = await ec2.send(
+        new DescribeAddressesCommand({ Filters: [{ Name: "tag:supabase:project-ref", Values: [project.ref] }] })
+      );
+      for (const addr of addrs.Addresses ?? []) {
+        if (addr.AssociationId) {
+          await ec2.send(new DisassociateAddressCommand({ AssociationId: addr.AssociationId })).catch(() => {});
+        }
+        if (addr.AllocationId) {
+          await ec2.send(new ReleaseAddressCommand({ AllocationId: addr.AllocationId })).catch(() => {});
+        }
+      }
+    } catch {
+      // best-effort EIP cleanup
+    }
     await deleteInstanceRole(iamClientFor(creds), project.ref);
   }
 }
