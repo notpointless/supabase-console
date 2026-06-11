@@ -73,8 +73,11 @@ export class SharedInfraProvisioner implements Provisioner {
     await getComposeRunner().start(projectDir(project.ref), name(project.ref));
   }
 
-  async restart(project: Project, services?: string[]): Promise<void> {
-    await getComposeRunner().restart(projectDir(project.ref), name(project.ref), services ?? []);
+  async restart(project: Project, _services?: string[]): Promise<void> {
+    // [console fork] Regenerate the stack from the current templates + secrets and recreate
+    // changed containers, so a restart actually applies config/provisioning fixes (e.g. an
+    // updated GOTRUE_JWT_KEYS) instead of bouncing the old containers with stale env.
+    await this.reconfigure(project);
   }
 
   async delete(project: Project): Promise<void> {
