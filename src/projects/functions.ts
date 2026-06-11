@@ -1,5 +1,5 @@
 import { readdir, readFile, writeFile, mkdir, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { SSMClient } from "@aws-sdk/client-ssm";
 import type { Project } from "../db/schema";
 import { projectDir } from "./stack/writer";
@@ -40,6 +40,22 @@ export interface FunctionMeta {
 function assertSlug(slug: string): void {
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(slug) || slug === "main") {
     throw new AppError(400, "invalid_slug", "Function slug must be 1-64 chars of [a-z0-9_-] and not 'main'");
+  }
+}
+
+// A file path within a function dir. Allow nested paths but block traversal AND every shell
+// metacharacter — on EC2 this name is interpolated into an SSM shell command, so a name like
+// `$(...)` or with backticks/semicolons would otherwise execute on the instance.
+function assertFileName(name: string): void {
+  if (
+    typeof name !== "string" ||
+    name.length === 0 ||
+    name.length > 255 ||
+    name.includes("..") ||
+    name.startsWith("/") ||
+    !/^[a-zA-Z0-9_][a-zA-Z0-9._/-]*$/.test(name)
+  ) {
+    throw new AppError(400, "invalid_file", `Invalid file name: ${name}`);
   }
 }
 
@@ -173,11 +189,10 @@ export async function deployFunction(
   if (!Array.isArray(files) || files.length === 0) {
     throw new AppError(400, "no_files", "At least one file is required");
   }
-  // sanitise file names (no path traversal — flat files in the function dir)
+  // sanitise every file (strict name allowlist — blocks traversal + shell injection on EC2)
   for (const f of files) {
-    if (!f || typeof f.name !== "string" || /[\\/]|\.\./.test(f.name) || typeof f.content !== "string") {
-      throw new AppError(400, "invalid_file", "Invalid file entry");
-    }
+    if (!f || typeof f.content !== "string") throw new AppError(400, "invalid_file", "Invalid file entry");
+    assertFileName(f.name);
   }
 
   const existing = await getFunction(p, slug);
@@ -194,16 +209,24 @@ export async function deployFunction(
     const dir = join(sharedBase(p), slug);
     await rm(dir, { recursive: true, force: true });
     await mkdir(dir, { recursive: true });
-    for (const f of files) await writeFile(join(dir, f.name), f.content, "utf8");
+    for (const f of files) {
+      const dest = join(dir, f.name);
+      await mkdir(dirname(dest), { recursive: true }); // support nested files (e.g. _shared/x.ts)
+      await writeFile(dest, f.content, "utf8");
+    }
     await writeFile(join(dir, META_FILE), JSON.stringify(meta), "utf8");
     return meta;
   }
-  // EC2: rewrite the function dir over SSM (base64 each file to survive the shell).
+  // EC2: rewrite the function dir over SSM (base64 each file to survive the shell; names are
+  // allowlist-validated above so interpolating them into the path can't inject).
   const writes = [
-    `rm -rf ${EC2_FN_BASE}/${slug}`,
-    `mkdir -p ${EC2_FN_BASE}/${slug}`,
-    ...files.map((f) => `echo ${b64(f.content)} | base64 -d > ${EC2_FN_BASE}/${slug}/${JSON.stringify(f.name)}`),
-    `echo ${b64(JSON.stringify(meta))} | base64 -d > ${EC2_FN_BASE}/${slug}/${META_FILE}`,
+    `rm -rf "${EC2_FN_BASE}/${slug}"`,
+    `mkdir -p "${EC2_FN_BASE}/${slug}"`,
+    ...files.flatMap((f) => {
+      const path = `${EC2_FN_BASE}/${slug}/${f.name}`;
+      return [`mkdir -p "$(dirname "${path}")"`, `echo ${b64(f.content)} | base64 -d > "${path}"`];
+    }),
+    `echo ${b64(JSON.stringify(meta))} | base64 -d > "${EC2_FN_BASE}/${slug}/${META_FILE}"`,
   ].join("\n");
   await ssm(p, writes);
   return meta;
