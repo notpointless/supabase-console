@@ -2,12 +2,49 @@ import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getEnv } from "../config/env";
+import { decrypt } from "../crypto/secrets";
 import type { Project } from "../db/schema";
 
-// [console fork] Logical daily backups for shared-infra projects. Each backup is a
-// `pg_dump -Fc` of the project's database, stored under DATA_DIR/backups/<ref>/. The
-// id is the backup's epoch-ms timestamp (stable + sortable). EC2/dedicated projects
-// back up on their own host and are out of scope here.
+// [console fork] Logical daily backups. Each backup is a `pg_dump -Fc` of the project's
+// database, stored under DATA_DIR/backups/<ref>/; the id is the backup's epoch-ms timestamp
+// (stable + sortable). Shared projects dump via `docker exec` into the local db container;
+// dedicated (EC2) projects dump over TCP from the instance (5432 is open in the stack SG)
+// using a transient postgres client container on the control plane — the dump streams to the
+// same local file, so listing/download/restore are identical across infra.
+
+// pg client image used to dump/restore a dedicated project's Postgres over TCP.
+const PG_CLIENT_IMAGE = "postgres:15";
+
+function ec2Host(project: Project): string {
+  const host = (project.connection as { host?: string } | null)?.host;
+  if (!host) throw new Error(`Project ${project.ref} has no reachable host for backup`);
+  return host;
+}
+
+// Build the `docker` argv for pg_dump (shared: exec into the container; EC2: run a client
+// container that connects to the instance over TCP).
+function pgDumpArgs(project: Project): string[] {
+  if (project.infrastructureType === "shared") {
+    return ["exec", `sb-${project.ref}-db-1`, "pg_dump", "-U", "postgres", "-Fc", "postgres"];
+  }
+  return [
+    "run", "--rm", "-e", `PGPASSWORD=${decrypt(project.dbPasswordEncrypted)}`, PG_CLIENT_IMAGE,
+    "pg_dump", "-h", ec2Host(project), "-p", "5432", "-U", "postgres", "-Fc", "postgres",
+  ];
+}
+
+// Build the `docker` argv for pg_restore (reads the dump on stdin).
+function pgRestoreArgs(project: Project): string[] {
+  const restore = ["pg_restore", "-U", "postgres", "-d", "postgres", "--clean", "--if-exists", "--no-owner", "--no-acl"];
+  if (project.infrastructureType === "shared") {
+    return ["exec", "-i", `sb-${project.ref}-db-1`, ...restore];
+  }
+  return [
+    "run", "--rm", "-i", "-e", `PGPASSWORD=${decrypt(project.dbPasswordEncrypted)}`, PG_CLIENT_IMAGE,
+    "pg_restore", "-h", ec2Host(project), "-p", "5432", "-U", "postgres", "-d", "postgres",
+    "--clean", "--if-exists", "--no-owner", "--no-acl",
+  ];
+}
 
 export interface BackupInfo {
   id: number;
@@ -45,11 +82,8 @@ export function backupFilePath(ref: string, id: number): string | null {
   return existsSync(file) ? file : null;
 }
 
-// Run `pg_dump` inside the project's db container and stream it to a file.
+// `pg_dump -Fc` the project's database (shared: local container; EC2: over TCP) to a file.
 export async function createBackup(project: Project): Promise<BackupInfo> {
-  if (project.infrastructureType !== "shared") {
-    throw new Error("Backups are only managed for shared-infrastructure projects");
-  }
   const dir = backupsDir(project.ref);
   mkdirSync(dir, { recursive: true });
   const ts = Date.now();
@@ -57,15 +91,7 @@ export async function createBackup(project: Project): Promise<BackupInfo> {
 
   await new Promise<void>((resolve, reject) => {
     const out = createWriteStream(file);
-    const child = spawn("docker", [
-      "exec",
-      `sb-${project.ref}-db-1`,
-      "pg_dump",
-      "-U",
-      "postgres",
-      "-Fc",
-      "postgres",
-    ]);
+    const child = spawn("docker", pgDumpArgs(project));
     let stderr = "";
     child.stdout.pipe(out);
     child.stderr.on("data", (d) => (stderr += d.toString()));
@@ -90,27 +116,11 @@ export async function createBackup(project: Project): Promise<BackupInfo> {
 // --clean drops + recreates objects first. pg_restore commonly exits 1 on benign
 // warnings (e.g. dropping objects that don't exist yet), so 0 and 1 both count as ok.
 export async function restoreBackup(project: Project, id: number): Promise<void> {
-  if (project.infrastructureType !== "shared") {
-    throw new Error("Restore is only managed for shared-infrastructure projects");
-  }
   const file = backupFilePath(project.ref, id);
   if (!file) throw new Error("Backup not found");
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("docker", [
-      "exec",
-      "-i",
-      `sb-${project.ref}-db-1`,
-      "pg_restore",
-      "-U",
-      "postgres",
-      "-d",
-      "postgres",
-      "--clean",
-      "--if-exists",
-      "--no-owner",
-      "--no-acl",
-    ]);
+    const child = spawn("docker", pgRestoreArgs(project));
     let stderr = "";
     child.stderr.on("data", (d) => (stderr += d.toString()));
     child.on("error", reject);

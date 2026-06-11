@@ -169,10 +169,9 @@ export const taskList = {
   // (scheduled via the worker crontab). Best-effort per project.
   backup_all: async (): Promise<void> => {
     const { createBackup } = await import("../projects/backups.js");
-    const rows = await db
-      .select()
-      .from(project)
-      .where(and(eq(project.status, "active"), eq(project.infrastructureType, "shared")));
+    // [console fork] All active projects — shared (local container) AND dedicated/EC2 (dumped
+    // over TCP from the instance). createBackup picks the right path per infra.
+    const rows = await db.select().from(project).where(eq(project.status, "active"));
     for (const row of rows) {
       try {
         await createBackup(row);
