@@ -4,6 +4,7 @@ import { getProjectSecrets } from "./secrets";
 import { decrypt } from "../crypto/secrets";
 import { allocatePorts } from "./ports";
 import { buildStack } from "./stack/compose";
+import { thirdPartyJwkKeys } from "./third-party-auth";
 import { writeStack, removeStack, projectDir } from "./stack/writer";
 import { getComposeRunner } from "./stack/compose-runner";
 import { getEnv } from "../config/env";
@@ -27,6 +28,7 @@ export class SharedInfraProvisioner implements Provisioner {
       urls: { apiExternalUrl: apiUrl, siteUrl: apiUrl, supabasePublicUrl: apiUrl },
       dataApiEnabled: project.dataApiEnabled,
       authConfig: project.authConfig as Record<string, unknown> | null,
+      thirdPartyJwks: thirdPartyJwkKeys(project),
     });
     const dir = writeStack(project.ref, { composeYaml, env });
     await getComposeRunner().up(dir, name(project.ref));
@@ -62,6 +64,7 @@ export class SharedInfraProvisioner implements Provisioner {
       urls: { apiExternalUrl: apiUrl, siteUrl: apiUrl, supabasePublicUrl: apiUrl },
       dataApiEnabled: project.dataApiEnabled,
       authConfig: project.authConfig as Record<string, unknown> | null,
+      thirdPartyJwks: thirdPartyJwkKeys(project),
     });
     const dir = writeStack(project.ref, { composeYaml, env });
     await getComposeRunner().up(dir, name(project.ref));

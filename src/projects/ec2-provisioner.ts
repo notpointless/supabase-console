@@ -26,6 +26,7 @@ import type { Project } from "../db/schema";
 import { getProjectSecrets } from "./secrets";
 import { decrypt } from "../crypto/secrets";
 import { buildStack } from "./stack/compose";
+import { thirdPartyJwkKeys } from "./third-party-auth";
 import { getCredentials } from "../aws/credentials-service";
 
 // Default instance type for a dedicated project (compute size is not yet persisted
@@ -246,6 +247,7 @@ export class Ec2Provisioner implements Provisioner {
       },
       dataApiEnabled: project.dataApiEnabled,
       authConfig: project.authConfig as Record<string, unknown> | null,
+      thirdPartyJwks: thirdPartyJwkKeys(project),
     });
 
     await ensureDefaultVpc(ec2);
@@ -437,6 +439,7 @@ export class Ec2Provisioner implements Provisioner {
       },
       dataApiEnabled: project.dataApiEnabled,
       authConfig: project.authConfig as Record<string, unknown> | null,
+      thirdPartyJwks: thirdPartyJwkKeys(project),
     });
     const envLines = Object.entries(env)
       .map(([k, v]) => `${k}=${v}`)

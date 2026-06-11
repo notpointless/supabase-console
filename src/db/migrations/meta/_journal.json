@@ -162,6 +162,13 @@
       "when": 1781205420078,
       "tag": "0022_clean_meteorite",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1781208073731,
+      "tag": "0023_clear_sway",
+      "breakpoints": true
     }
   ]
 }

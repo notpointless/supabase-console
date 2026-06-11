@@ -40,6 +40,7 @@ import {
 } from "./custom-hostname";
 import { readFileSync } from "node:fs";
 import { listBranches, createBranch, getBranchById, deleteBranch, resetBranch, mapBranch, branchSchemaDiff } from "./branches";
+import { listThirdPartyAuth, addThirdPartyAuth, deleteThirdPartyAuth } from "./third-party-auth";
 import { mergeBranchToProduction } from "../integrations/github-deploy";
 import { readStandbyKeys, addStandbyKey, removeStandbyKey, setStandbyKeyStatus } from "./signing-keys-store";
 import { assertMfaCompliant } from "../auth/mfa";
@@ -526,6 +527,49 @@ projects.patch("/api/v1/projects/:ref/auth-config", async (c) => {
     /* persisted; reconfigure is best-effort */
   }
   return c.json(merged);
+});
+
+// [console fork] Third-Party Auth integrations (external JWT issuers). List/add/remove,
+// stored on the project; the resolved issuer JWKS is merged into the stack verify keys on
+// reconfigure so the data API accepts those tokens. EC2-compatible (same reconfigure path).
+projects.get("/api/v1/projects/:ref/third-party-auth", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  return c.json(listThirdPartyAuth(row));
+});
+
+projects.post("/api/v1/projects/:ref/third-party-auth", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const created = await addThirdPartyAuth(row, body);
+  // Push the new issuer's keys into the running stack's verify set (best-effort; active only).
+  const updated = await getProjectByRef(row.ref);
+  try {
+    if (updated && updated.status === "active") await getProvisionerFor(updated).reconfigure?.(updated);
+  } catch {
+    /* persisted; reconfigure is best-effort */
+  }
+  return c.json(created);
+});
+
+projects.delete("/api/v1/projects/:ref/third-party-auth/:id", async (c) => {
+  await requireSession(c);
+  const row = await getProjectByRef(c.req.param("ref"));
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  await deleteThirdPartyAuth(row, c.req.param("id"));
+  const updated = await getProjectByRef(row.ref);
+  try {
+    if (updated && updated.status === "active") await getProvisionerFor(updated).reconfigure?.(updated);
+  } catch {
+    /* persisted; reconfigure is best-effort */
+  }
+  return c.json({ deleted: true });
 });
 
 // Logical database backups (pg_dump). List + create-now.

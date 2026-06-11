@@ -27,6 +27,11 @@ export const project = pgTable("project", {
   // pages — signups, OAuth providers, OAuth server, etc.). Applied as GOTRUE_<key> env on
   // (re)configure; null = stack defaults.
   authConfig: jsonb("auth_config"),
+  // [console fork] Third-Party Auth integrations (external JWT issuers — Firebase, Auth0,
+  // Cognito, etc.). Array of { id, type, oidc_issuer_url, jwks_url, custom_jwks, inserted_at,
+  // resolved_jwks }. The resolved issuer JWKS is merged into the stack's verify keys so the
+  // data API accepts those tokens. null/[] = none.
+  thirdPartyAuth: jsonb("third_party_auth"),
   kongHttpPort: integer("kong_http_port"),
   kongHttpsPort: integer("kong_https_port"),
   dbPort: integer("db_port"),

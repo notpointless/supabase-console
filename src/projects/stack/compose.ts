@@ -19,6 +19,9 @@ export interface BuildStackInput {
   // pages). Applied as bare env vars the compose maps to GOTRUE_* (e.g. OAUTH_SERVER_ENABLED
   // → GOTRUE_OAUTH_SERVER_ENABLED). Infra-critical keys are never overridable (denylist below).
   authConfig?: Record<string, unknown> | null;
+  // [console fork] Third-Party Auth issuer JWKS keys to add to the stack's verify set, so the
+  // data API accepts tokens signed by configured external issuers (Firebase, Auth0, etc.).
+  thirdPartyJwks?: unknown[];
 }
 
 // [console fork] An auth-config override may only set RECOGNISED GoTrue settings — an
@@ -64,6 +67,11 @@ export async function buildStack(
     ...standby.map((k) => k.privateJwk),
   ];
   jwtJwksObj.keys.push(...standby.map((k) => k.publicJwk));
+  // [console fork] Trust configured third-party issuers' keys (verify-only — never added to
+  // the signing set) so the data API accepts tokens those external IdPs sign.
+  if (Array.isArray(input.thirdPartyJwks) && input.thirdPartyJwks.length > 0) {
+    jwtJwksObj.keys.push(...(input.thirdPartyJwks as any[]));
+  }
   const env: Record<string, string> = {
     ...STACK_ENV_DEFAULTS,
     POSTGRES_PASSWORD: input.dbPassword,
