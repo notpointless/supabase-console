@@ -209,9 +209,9 @@ IP=$(curl -fsS http://169.254.169.254/latest/meta-data/public-ipv4 || echo local
   echo "SUPABASE_PUBLIC_URL=http://$IP:8000"
   echo "SITE_URL=http://$IP:8000"
 } >> .env
-# Include the logs overlay so the analytics (Logflare) + vector services start — they back the
-# dashboard's report/log graphs. DOCKER_SOCKET_LOCATION + LOGFLARE_* tokens come from buildStack's env.
-docker compose -f docker-compose.yml -f docker-compose.logs.yml up -d
+# COMPOSE_FILE comes from the injected env (base + logs overlay [+ caddy when a custom
+# hostname is active]) — docker compose reads it from .env, so don't pass -f flags here.
+docker compose up -d
 
 # [console fork] A dedicated instance is the project's own box, so tune Postgres to
 # use its full RAM/CPU (the image ships conservative defaults: shared_buffers=128MB,
@@ -254,6 +254,22 @@ function applyIcebergEnv(env: Record<string, string>, region: string | null | un
   env.ICEBERG_CATALOG_URL = `https://s3tables.${region ?? "us-east-1"}.amazonaws.com/iceberg/v1`;
 }
 
+// [console fork] The instance's compose file set + custom-domain proxy env, derived from
+// PROJECT STATE so every compose invocation (provision, reconfigure, custom-hostname
+// activate) agrees. COMPOSE_FILE lives in the .env that docker compose reads — using
+// explicit -f flags somewhere would silently drop overlays added elsewhere (the caddy
+// activation used to drop the logs overlay, and reconfigure used to drop caddy +
+// PROXY_DOMAIN, breaking an active custom domain on the next config change).
+function applyComposeEnv(env: Record<string, string>, project: Project): void {
+  const files = ["docker-compose.yml", "docker-compose.logs.yml"];
+  const ch = project.customHostname as { status?: string; hostname?: string } | null;
+  if (ch?.status === "active" && ch.hostname) {
+    files.push("docker-compose.caddy.yml");
+    env.PROXY_DOMAIN = ch.hostname;
+  }
+  env.COMPOSE_FILE = files.join(":");
+}
+
 export class Ec2Provisioner implements Provisioner {
   async provision(project: Project): Promise<ProvisionResult> {
     const secrets = await getProjectSecrets(project.id);
@@ -278,6 +294,7 @@ export class Ec2Provisioner implements Provisioner {
       storageConfig: project.storageConfig as { fileSizeLimit?: number } | null,
     });
     applyIcebergEnv(env, project.region);
+    applyComposeEnv(env, project);
 
     await ensureDefaultVpc(ec2);
     // Per-instance IAM role/profile (SSM remote-exec). Torn down on delete + rollback.
@@ -531,6 +548,7 @@ export class Ec2Provisioner implements Provisioner {
       storageConfig: project.storageConfig as { fileSizeLimit?: number } | null,
     });
     applyIcebergEnv(env, project.region);
+    applyComposeEnv(env, project);
     const envLines = Object.entries(env)
       .map(([k, v]) => `${k}=${v}`)
       .join("\n");
@@ -547,7 +565,8 @@ IP=$(curl -fsS http://169.254.169.254/latest/meta-data/public-ipv4 || echo local
   echo "SUPABASE_PUBLIC_URL=http://$IP:8000"
   echo "SITE_URL=http://$IP:8000"
 } >> .env
-docker compose -f docker-compose.yml -f docker-compose.logs.yml up -d`;
+# COMPOSE_FILE comes from the injected env (base + logs [+ caddy]); no -f flags.
+docker compose up -d`;
     await runCommand(ssm, instanceIdOf(project), script);
   }
 

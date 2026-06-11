@@ -196,6 +196,10 @@ export async function reverifyCustomHostname(p: Project) {
 
 export async function activateCustomHostname(p: Project) {
   ensureDedicated(p);
+  // The Caddy enable runs over SSM — the instance must be running.
+  if (p.status !== "active") {
+    throw new AppError(409, "project_not_running", `Project is ${p.status} — resume it before activating a custom hostname`);
+  }
   const s = p.customHostname as CustomHostnameState | null;
   if (!s?.hostname) throw new AppError(404, "no_hostname", "custom hostname configuration not found");
   const { ec2, ssm } = await ec2For(p);
@@ -226,10 +230,11 @@ export async function activateCustomHostname(p: Project) {
     }
   }
   // Enable Caddy (TLS via Let's Encrypt) in front of kong: set PROXY_DOMAIN + add the
-  // caddy compose to COMPOSE_FILE, then bring the stack up.
+  // caddy compose to COMPOSE_FILE, then bring the stack up. Keep the logs overlay in the
+  // file set — replacing it wholesale used to orphan the analytics/vector services.
   const cmd = `cd /opt/supabase/docker && \
 sed -i '/^PROXY_DOMAIN=/d' .env && echo 'PROXY_DOMAIN=${s.hostname}' >> .env && \
-sed -i 's|^COMPOSE_FILE=.*|COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml|' .env && \
+sed -i '/^COMPOSE_FILE=/d' .env && echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.logs.yml:docker-compose.caddy.yml' >> .env && \
 /usr/bin/docker compose up -d 2>&1 | tail -3`;
   await runCommand(ssm, instanceIdOf(p), cmd);
   const next: CustomHostnameState = { ...s, status: "active", sslStatus: "active" };
@@ -247,7 +252,7 @@ export async function deleteCustomHostname(p: Project) {
       await runCommand(
         ssm,
         instanceIdOf(p),
-        `cd /opt/supabase/docker && sed -i 's|^COMPOSE_FILE=.*|COMPOSE_FILE=docker-compose.yml|' .env && sed -i '/^PROXY_DOMAIN=/d' .env && /usr/bin/docker compose up -d --remove-orphans 2>&1 | tail -2`
+        `cd /opt/supabase/docker && sed -i '/^COMPOSE_FILE=/d' .env && echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.logs.yml' >> .env && sed -i '/^PROXY_DOMAIN=/d' .env && /usr/bin/docker compose up -d --remove-orphans 2>&1 | tail -2`
       );
     } catch {
       // instance gone / unreachable — just clear the record

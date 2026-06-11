@@ -473,12 +473,16 @@ projects.get("/api/v1/projects/:ref/internal-config", async (c) => {
   const secrets = await getProjectSecrets(row.id);
   if (!secrets) throw new AppError(404, "project_secrets_not_found", "Project secrets not found");
   // Shared projects expose Kong on the control-plane host; EC2 projects on the instance host.
+  // Only a RUNNING project gets an endpoint — a paused/stopped instance is unreachable and
+  // the BFFs that consume this fetch it with no timeout (each call would hang).
   let endpoint = "";
-  if (row.infrastructureType === "shared") {
-    if (row.kongHttpPort != null) endpoint = `http://localhost:${row.kongHttpPort}`;
-  } else {
-    const conn = (row.connection ?? {}) as { host?: string };
-    if (conn.host) endpoint = `http://${conn.host}:8000`;
+  if (row.status === "active") {
+    if (row.infrastructureType === "shared") {
+      if (row.kongHttpPort != null) endpoint = `http://localhost:${row.kongHttpPort}`;
+    } else {
+      const conn = (row.connection ?? {}) as { host?: string };
+      if (conn.host) endpoint = `http://${conn.host}:8000`;
+    }
   }
   return c.json({
     endpoint,
