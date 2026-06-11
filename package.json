@@ -4,13 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch --env-file=.env src/server.ts",
     "build": "tsup",
     "start": "node dist/server.js",
     "test": "vitest run",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "migrate": "drizzle-kit migrate",
+    "migrate": "node --env-file=.env node_modules/drizzle-kit/bin.cjs migrate",
     "db:generate": "drizzle-kit generate",
     "auth:generate": "npx @better-auth/cli generate --config src/auth/auth.ts --output src/db/auth-schema.ts --yes"
   },

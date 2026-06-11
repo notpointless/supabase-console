@@ -27,17 +27,24 @@ Multi-tenant control panel for provisioning and managing Supabase projects on sh
 This repo is the **control-plane backend** (`:3000`). The dashboard is a
 [forked Supabase Studio](https://github.com/notpointless/supabase) (`:8082`) that proxies to it — run both.
 
-Requires Node, pnpm, Docker, and the `pointless` CLI.
+Requires Node, pnpm, and Docker. Works on Windows, macOS, and Linux (the `pnpm` scripts are
+shell-agnostic; on Windows run the shell commands below in Git Bash or PowerShell).
 
 ```bash
-# 1. Backend (this repo)
+# 1. Control-plane Postgres (required). mailpit is OPTIONAL — it captures outgoing email
+#    locally (invites, confirmations) so you can read them at http://localhost:8025.
+docker run -d --name console-dev-db -p 5432:5432 -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=supabase_console postgres:16-alpine
+docker run -d --name mailpit -p 1025:1025 -p 8025:8025 axllent/mailpit   # optional (mail viewer at :8025)
+
+# 2. Backend (this repo)
 git clone https://github.com/notpointless/supabase-console.git
 cd supabase-console && pnpm install
-cp .env.example .env          # fill in the values
-pointless run migrate
-pointless dev                 # backend on :3000
+cp .env.example .env          # fill in the values; DATABASE_URL matches the container above:
+                              #   postgres://postgres:postgres@localhost:5432/supabase_console
+pnpm migrate                  # create the schema
+pnpm dev                      # backend on :3000 (loads .env automatically)
 
-# 2. Dashboard (the forked Studio — the console-fork branch)
+# 3. Dashboard (the forked Studio — the console-fork branch)
 git clone -b chore/console-fork https://github.com/notpointless/supabase.git
 cd supabase/apps/studio && pnpm install
 # set apps/studio/.env.local: CONSOLE_API_URL=http://localhost:3000, NEXT_PUBLIC_IS_PLATFORM=true
@@ -49,8 +56,10 @@ Open `http://localhost:8082/dashboard` — it redirects to **/setup/install** to
 ## Commands
 
 ```bash
-pointless dev      # run locally with hot reload
-pointless test     # run the test suite
-pointless lint     # format + lint + typecheck
-pointless build    # produce release artifacts
+pnpm dev         # run the backend with hot reload (loads .env)
+pnpm migrate     # apply database migrations
+pnpm test        # run the test suite
+pnpm lint        # lint
+pnpm typecheck   # type-check
+pnpm build       # produce release artifacts
 ```
