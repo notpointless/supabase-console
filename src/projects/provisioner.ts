@@ -30,7 +30,8 @@ export interface DiskConfig {
 export interface Provisioner {
   provision(project: Project): Promise<ProvisionResult>;
   pause(project: Project): Promise<void>;
-  resume(project: Project): Promise<void>;
+  // Resume may return a fresh connection to persist (EC2's public host changes on start).
+  resume(project: Project): Promise<Connection | void>;
   delete(project: Project): Promise<void>;
   // Re-apply stack config (e.g. Data API on/off) in place, preserving ports.
   reconfigure?(project: Project): Promise<void>;

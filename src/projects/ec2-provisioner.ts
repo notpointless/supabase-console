@@ -381,10 +381,25 @@ export class Ec2Provisioner implements Provisioner {
     await ec2.send(new StopInstancesCommand({ InstanceIds: [instanceIdOf(project)] }));
   }
 
-  async resume(project: Project): Promise<void> {
+  async resume(project: Project): Promise<Connection> {
     const creds = await getCredentials(project.organizationId);
     const ec2 = clientFor(project.region, creds);
-    await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceIdOf(project)] }));
+    const instanceId = instanceIdOf(project);
+    await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
+    // [console fork] The public host changes on stop/start, so capture + return the fresh
+    // connection to persist — otherwise the project (and its internal-config endpoint) point
+    // at the dead host after a pause/resume.
+    const host = await this.waitForPublicHost(ec2, instanceId);
+    return {
+      host,
+      apiUrl: `http://${host}:8000`,
+      kongHttpPort: 8000,
+      kongHttpsPort: 8443,
+      dbPort: 5432,
+      ref: project.ref,
+      instanceId,
+      region: project.region,
+    } as Connection & { instanceId: string; region: string };
   }
 
   // Dedicated instances reboot the whole box (the stack auto-starts via

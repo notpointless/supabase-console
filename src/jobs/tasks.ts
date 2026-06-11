@@ -57,8 +57,13 @@ export const taskList = {
     if (!row) return;
     if (row.status !== "paused") return;
     try {
-      await getProvisionerFor(row).resume(row);
-      await db.update(project).set({ status: "active", updatedAt: new Date() }).where(eq(project.ref, ref));
+      const conn = await getProvisionerFor(row).resume(row);
+      // [console fork] EC2 instances get a NEW public host on start; persist it so the project
+      // (and its internal-config endpoint) point at the live instance after pause/resume.
+      await db
+        .update(project)
+        .set({ status: "active", ...(conn ? { connection: conn } : {}), updatedAt: new Date() })
+        .where(eq(project.ref, ref));
     } catch (e) {
       await db
         .update(project)
