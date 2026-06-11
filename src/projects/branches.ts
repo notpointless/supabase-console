@@ -9,6 +9,7 @@ import { project, projectSecrets, projectRepoConnection, type Project } from "..
 import { encrypt } from "../crypto/secrets";
 import { generateProjectSecrets, encryptedSecretColumns } from "./secrets";
 import { getProjectByRef } from "./service";
+import { dumpProjectSchema, seedBranchFromParentEc2 } from "./db-exec";
 import { getQueue } from "../jobs/queue";
 import { AppError } from "../http/error";
 
@@ -103,11 +104,9 @@ export async function createBranch(input: CreateBranchInput): Promise<Project> {
   if (parent.parentProjectId) {
     throw new AppError(400, "cannot_branch_branch", "Cannot create a branch of a branch");
   }
-  if (parent.infrastructureType !== "shared") {
-    // Branching a dedicated/EC2 project would mean launching another instance —
-    // deferred. Shared-infra (Docker) branches are supported.
-    throw new AppError(400, "branch_unsupported_infra", "Preview branches are only supported on shared infrastructure");
-  }
+  // [console fork] Branches inherit the parent's infrastructure: a shared branch is a second
+  // Docker stack on the control-plane host; a dedicated (EC2) branch launches its own instance
+  // (provisioned like any EC2 project) and is seeded from the parent cross-instance over SSM.
   const ref = generateRef();
   const secrets = await generateProjectSecrets();
   const dbPassword = randomBytes(18).toString("base64url");
@@ -210,31 +209,6 @@ export async function resetBranch(id: string, withData = false): Promise<void> {
   await getQueue().enqueue("seed_branch", { ref: row.ref, withData });
 }
 
-/** Dump a project's public schema (DDL only, normalized) for diffing. */
-function dumpPublicSchema(ref: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("docker", [
-      "exec",
-      `sb-${ref}-db-1`,
-      "pg_dump",
-      "-U",
-      "postgres",
-      "--schema=public",
-      "--schema-only",
-      "--no-owner",
-      "--no-acl",
-      "--no-comments",
-      "postgres",
-    ]);
-    let out = "";
-    let err = "";
-    child.stdout.on("data", (d) => (out += d.toString()));
-    child.stderr.on("data", (d) => (err += d.toString()));
-    child.on("error", reject);
-    child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(err.slice(0, 300) || `pg_dump exited ${code}`))));
-  });
-}
-
 /**
  * Schema diff between a preview branch and its parent (production): a unified
  * diff of each side's `public` schema DDL. Empty when identical. Returns "" for a
@@ -248,8 +222,8 @@ export async function branchSchemaDiff(branchId: string): Promise<string> {
   if (!parent) throw new AppError(404, "project_not_found", "Parent project not found");
 
   const [prodSql, branchSql] = await Promise.all([
-    dumpPublicSchema(parent.ref),
-    dumpPublicSchema(branch.ref),
+    dumpProjectSchema(parent),
+    dumpProjectSchema(branch),
   ]);
   if (prodSql === branchSql) return "";
 
@@ -281,6 +255,14 @@ export async function seedBranchFromParent(branch: Project, withData: boolean): 
   if (!branch.parentProjectId) throw new Error("project is not a branch");
   const [parent] = await db.select().from(project).where(eq(project.id, branch.parentProjectId));
   if (!parent) throw new Error("parent project not found");
+
+  // [console fork] Dedicated (EC2) branches run on their own instance — seed across instances
+  // over SSM (waits for the branch DB to be ready, then pg_dumps from the parent over TCP and
+  // restores locally) instead of piping between local Docker containers.
+  if (branch.infrastructureType !== "shared") {
+    await seedBranchFromParentEc2(parent, branch, withData);
+    return;
+  }
 
   const dumpArgs = [
     "exec",
