@@ -385,6 +385,16 @@ export class Ec2Provisioner implements Provisioner {
         await ec2.send(new ReleaseAddressCommand({ AllocationId: allocationId })).catch(() => {});
       }
       await deleteInstanceRole(iam, project.ref).catch(() => {});
+      // [console fork] Each dedicated project takes one Elastic IP (for a stable public IP
+      // across stop/start); AWS caps these at 5/region by default. Surface a clear, actionable
+      // message instead of the raw SDK error so the operator knows to request a limit increase.
+      const name = (e as { name?: string })?.name ?? "";
+      if (name === "AddressLimitExceeded" || /AddressLimitExceeded/.test(String((e as { message?: string })?.message ?? ""))) {
+        throw new Error(
+          "AWS Elastic IP limit reached (default 5 per region). Each dedicated project needs one " +
+            "for a stable IP across pause/resume — request an EC2 Elastic IP limit increase to launch more."
+        );
+      }
       throw e;
     }
   }
