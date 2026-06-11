@@ -23,6 +23,10 @@ export const project = pgTable("project", {
   connection: jsonb("connection"),
   // Custom hostname (dedicated/EC2 only): { hostname, status, sslStatus, originIp, createdAt }.
   customHostname: jsonb("custom_hostname"),
+  // [console fork] Per-project GoTrue auth-config overrides (the Authentication settings
+  // pages — signups, OAuth providers, OAuth server, etc.). Applied as GOTRUE_<key> env on
+  // (re)configure; null = stack defaults.
+  authConfig: jsonb("auth_config"),
   kongHttpPort: integer("kong_http_port"),
   kongHttpsPort: integer("kong_https_port"),
   dbPort: integer("db_port"),

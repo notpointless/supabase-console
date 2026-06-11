@@ -241,6 +241,7 @@ export class Ec2Provisioner implements Provisioner {
         supabasePublicUrl: "http://__PUBLIC_HOST__:8000",
       },
       dataApiEnabled: project.dataApiEnabled,
+      authConfig: project.authConfig as Record<string, unknown> | null,
     });
 
     await ensureDefaultVpc(ec2);
@@ -431,6 +432,7 @@ export class Ec2Provisioner implements Provisioner {
         supabasePublicUrl: "http://__PUBLIC_HOST__:8000",
       },
       dataApiEnabled: project.dataApiEnabled,
+      authConfig: project.authConfig as Record<string, unknown> | null,
     });
     const envLines = Object.entries(env)
       .map(([k, v]) => `${k}=${v}`)

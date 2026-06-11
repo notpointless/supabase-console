@@ -15,7 +15,22 @@ export interface BuildStackInput {
   urls: { apiExternalUrl: string; siteUrl: string; supabasePublicUrl: string };
   // When false, the REST Data API does not expose the user's `public` schema.
   dataApiEnabled?: boolean;
+  // [console fork] Per-project GoTrue auth-config overrides (the Authentication settings
+  // pages). Applied as bare env vars the compose maps to GOTRUE_* (e.g. OAUTH_SERVER_ENABLED
+  // → GOTRUE_OAUTH_SERVER_ENABLED). Infra-critical keys are never overridable (denylist below).
+  authConfig?: Record<string, unknown> | null;
 }
+
+// [console fork] Keys an auth-config override may NEVER set — the DB/JWT/port/secret wiring.
+// A project member edits auth settings via the auth-config endpoint; this guarantees that
+// surface can't reach the stack's security-critical env even if the payload is hostile.
+const PROTECTED_ENV_KEYS = new Set([
+  "POSTGRES_PASSWORD", "JWT_SECRET", "ANON_KEY", "SERVICE_ROLE_KEY",
+  "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY", "ANON_KEY_ASYMMETRIC",
+  "SERVICE_ROLE_KEY_ASYMMETRIC", "JWT_KEYS", "JWT_JWKS", "SECRET_KEY_BASE",
+  "DASHBOARD_PASSWORD", "VAULT_ENC_KEY", "PG_META_CRYPTO_KEY",
+  "KONG_HTTP_PORT", "KONG_HTTPS_PORT", "POSTGRES_PORT", "POOLER_PROXY_PORT_TRANSACTION",
+]);
 
 const BASE_PATH = join(dirname(fileURLToPath(import.meta.url)), "compose.base.yml");
 
@@ -75,6 +90,15 @@ export async function buildStack(
   // Data API disabled: don't expose the user's `public` schema over REST.
   if (input.dataApiEnabled === false) {
     env.PGRST_DB_SCHEMAS = "graphql_public";
+  }
+
+  // [console fork] Layer the project's saved auth-config overrides on top, so the
+  // Authentication settings pages (signups, OAuth providers, the OAuth server, etc.)
+  // actually drive GoTrue. Bare keys map to GOTRUE_* in compose.base.yml. Infra-critical
+  // keys are skipped so this surface can never clobber DB/JWT/port wiring.
+  for (const [k, v] of Object.entries(input.authConfig ?? {})) {
+    if (PROTECTED_ENV_KEYS.has(k) || v === null || v === undefined) continue;
+    env[k] = typeof v === "object" ? JSON.stringify(v) : String(v);
   }
 
   const doc = parse(readFileSync(BASE_PATH, "utf8")) as {

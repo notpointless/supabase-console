@@ -26,6 +26,7 @@ export class SharedInfraProvisioner implements Provisioner {
       ports: { kongHttp: ports.kongHttpPort, kongHttps: ports.kongHttpsPort, db: ports.dbPort },
       urls: { apiExternalUrl: apiUrl, siteUrl: apiUrl, supabasePublicUrl: apiUrl },
       dataApiEnabled: project.dataApiEnabled,
+      authConfig: project.authConfig as Record<string, unknown> | null,
     });
     const dir = writeStack(project.ref, { composeYaml, env });
     await getComposeRunner().up(dir, name(project.ref));
@@ -60,6 +61,7 @@ export class SharedInfraProvisioner implements Provisioner {
       ports: { kongHttp: project.kongHttpPort, kongHttps: project.kongHttpsPort, db: project.dbPort },
       urls: { apiExternalUrl: apiUrl, siteUrl: apiUrl, supabasePublicUrl: apiUrl },
       dataApiEnabled: project.dataApiEnabled,
+      authConfig: project.authConfig as Record<string, unknown> | null,
     });
     const dir = writeStack(project.ref, { composeYaml, env });
     await getComposeRunner().up(dir, name(project.ref));

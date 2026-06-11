@@ -144,6 +144,10 @@ services:
       GOTRUE_SITE_URL: ${SITE_URL}
       GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS}
       GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP}
+      # [console fork] OAuth 2.1 authorization server (the project-internal "OAuth Server"
+      # page). Driven by the project's saved auth-config; defaults off for untouched projects.
+      GOTRUE_OAUTH_SERVER_ENABLED: ${OAUTH_SERVER_ENABLED:-false}
+      GOTRUE_OAUTH_SERVER_ALLOW_DYNAMIC_REGISTRATION: ${OAUTH_SERVER_ALLOW_DYNAMIC_REGISTRATION:-false}
 
       GOTRUE_JWT_ADMIN_ROLES: service_role
       GOTRUE_JWT_AUD: authenticated

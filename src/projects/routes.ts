@@ -488,6 +488,46 @@ projects.get("/api/v1/projects/:ref/internal-config", async (c) => {
   });
 });
 
+// [console fork] Per-project GoTrue auth-config (the Authentication settings pages).
+// Supabase keeps this in its platform DB; we store it on the project so buildStack can apply
+// it to GoTrue (signups, OAuth providers, the OAuth server, rate limits, etc.). GET returns
+// the saved overrides; PATCH merges them in and reconfigures so the running stack picks up
+// the change immediately. The override is persisted regardless, so it also applies on the
+// next (re)provision — including for paused/EC2 projects when they next come up.
+projects.get("/api/v1/projects/:ref/auth-config", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  return c.json((row.authConfig ?? {}) as Record<string, unknown>);
+});
+
+projects.patch("/api/v1/projects/:ref/auth-config", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["update"] });
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const merged = { ...((row.authConfig ?? {}) as Record<string, unknown>), ...(body ?? {}) };
+  const [updated] = await db
+    .update(project)
+    .set({ authConfig: merged, updatedAt: new Date() })
+    .where(eq(project.id, row.id))
+    .returning();
+  // Push the change to the live stack so GoTrue reloads with it (best-effort — only an
+  // active project has a running stack to reconfigure; others apply it when they next start).
+  try {
+    if (updated && updated.status === "active") {
+      await getProvisionerFor(updated).reconfigure?.(updated);
+    }
+  } catch {
+    /* persisted; reconfigure is best-effort */
+  }
+  return c.json(merged);
+});
+
 // Logical database backups (pg_dump). List + create-now.
 projects.get("/api/v1/projects/:ref/backups", async (c) => {
   await requireSession(c);
