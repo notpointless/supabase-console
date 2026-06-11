@@ -459,6 +459,35 @@ projects.get("/api/v1/projects/:ref/api-keys", async (c) => {
   });
 });
 
+// [console fork] Foundation for the project-internal admin (auth providers, OAuth server,
+// hooks, etc.). Returns where to reach this project's OWN Kong/GoTrue + the per-project
+// service_role/anon tokens, so the studio BFFs can talk to the right project instead of a
+// fixed single-tenant endpoint. Authorized like every project route (org membership). The
+// jwtSecret itself is never returned — only the minted JWTs.
+projects.get("/api/v1/projects/:ref/internal-config", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  const secrets = await getProjectSecrets(row.id);
+  if (!secrets) throw new AppError(404, "project_secrets_not_found", "Project secrets not found");
+  // Shared projects expose Kong on the control-plane host; EC2 projects on the instance host.
+  let endpoint = "";
+  if (row.infrastructureType === "shared") {
+    if (row.kongHttpPort != null) endpoint = `http://localhost:${row.kongHttpPort}`;
+  } else {
+    const conn = (row.connection ?? {}) as { host?: string };
+    if (conn.host) endpoint = `http://${conn.host}:8000`;
+  }
+  return c.json({
+    endpoint,
+    serviceRoleKey: secrets.serviceRoleKey,
+    anonKey: secrets.anonKey,
+    infrastructureType: row.infrastructureType,
+  });
+});
+
 // Logical database backups (pg_dump). List + create-now.
 projects.get("/api/v1/projects/:ref/backups", async (c) => {
   await requireSession(c);
