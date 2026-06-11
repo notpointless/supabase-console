@@ -410,6 +410,48 @@ export class Ec2Provisioner implements Provisioner {
     await ec2.send(new RebootInstancesCommand({ InstanceIds: [instanceIdOf(project)] }));
   }
 
+  // [console fork] EC2 twin of the shared `reconfigure`: regenerate the stack env and re-apply
+  // it on the dedicated box over SSM (rewrite /opt/supabase/docker/.env from the fork defaults +
+  // our env + the instance's public URLs, then `compose up -d` to recreate changed containers).
+  // This is what lets config changes (e.g. auth/OAuth toggles, the JWT-keys fix) reach dedicated
+  // projects — without it, EC2 projects could only be rebooted, never reconfigured.
+  async reconfigure(project: Project): Promise<void> {
+    const secrets = await getProjectSecrets(project.id);
+    if (!secrets) throw new Error(`No secrets for project ${project.ref}`);
+    const creds = await getCredentials(project.organizationId);
+    const ssm = ssmClientFor(project.region, creds);
+    const { env } = await buildStack({
+      project: { ref: project.ref, name: project.name },
+      secrets,
+      dbPassword: decrypt(project.dbPasswordEncrypted),
+      ports: { kongHttp: 8000, kongHttps: 8443, db: 5432 },
+      urls: {
+        apiExternalUrl: "http://__PUBLIC_HOST__:8000",
+        siteUrl: "http://__PUBLIC_HOST__:8000",
+        supabasePublicUrl: "http://__PUBLIC_HOST__:8000",
+      },
+      dataApiEnabled: project.dataApiEnabled,
+    });
+    const envLines = Object.entries(env)
+      .map(([k, v]) => `${k}=${v}`)
+      .join("\n");
+    const envB64 = Buffer.from(envLines, "utf8").toString("base64");
+    const script = `#!/bin/bash
+set -euxo pipefail
+cd /opt/supabase/docker
+cp .env.example .env
+echo "" >> .env
+echo "${envB64}" | base64 -d >> .env
+IP=$(curl -fsS http://169.254.169.254/latest/meta-data/public-ipv4 || echo localhost)
+{
+  echo "API_EXTERNAL_URL=http://$IP:8000"
+  echo "SUPABASE_PUBLIC_URL=http://$IP:8000"
+  echo "SITE_URL=http://$IP:8000"
+} >> .env
+docker compose up -d`;
+    await runCommand(ssm, instanceIdOf(project), script);
+  }
+
   // Change compute: stop -> change instance type (requires stopped) -> start. The
   // public host changes on stop/start, so return the fresh connection to persist.
   async resize(project: Project): Promise<Connection> {
