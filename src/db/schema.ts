@@ -117,6 +117,18 @@ export const orgGithubAppConfig = pgTable("org_github_app_config", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// [console fork] Per-org AI assistant config: the organization's own OpenAI API key (encrypted
+// at rest). The studio AI routes resolve this for the request's org so the Assistant runs on the
+// org's own OpenAI account instead of a single global env key. The raw key is never returned to
+// the browser — only a "configured" flag — and is decrypted server-side only for the AI routes.
+export const orgAiConfig = pgTable("org_ai_config", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: text("organization_id").notNull().unique().references(() => organization.id, { onDelete: "cascade" }),
+  openaiApiKeyEncrypted: text("openai_api_key_encrypted").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // A user's GitHub App OAuth authorization (user-access token + identity), scoped to
 // the org whose App they authorized. Powers the "Connect GitHub" state + repo listing.
 export const githubAuthorization = pgTable("github_authorization", {
@@ -229,6 +241,7 @@ export type ProjectSecrets = typeof projectSecrets.$inferSelect;
 export type OrgOauthApp = typeof orgOauthApp.$inferSelect;
 export type OrgGithubConnection = typeof orgGithubConnection.$inferSelect;
 export type OrgGithubAppConfig = typeof orgGithubAppConfig.$inferSelect;
+export type OrgAiConfig = typeof orgAiConfig.$inferSelect;
 export type ProjectFunctionSecret = typeof projectFunctionSecret.$inferSelect;
 export type AuditLogDrain = typeof auditLogDrain.$inferSelect;
 export type GithubAuthorization = typeof githubAuthorization.$inferSelect;
