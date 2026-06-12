@@ -22,7 +22,7 @@ import {
   resizeProjectDisk,
   deleteProject,
 } from "./service";
-import { getProjectSecrets, derivePublishableKey, deriveSecretKey, deriveSigningKeys } from "./secrets";
+import { getProjectSecrets, derivePublishableKey, deriveSecretKey, deriveSigningKeys, deriveS3ProtocolCreds } from "./secrets";
 import type { Project } from "../db/schema";
 import { project, organization, member } from "../db/schema";
 import { db } from "../db/client";
@@ -518,6 +518,24 @@ async function handleAnalyticsQuery(c: any) {
 }
 projects.get("/api/v1/projects/:ref/analytics/query/:name", handleAnalyticsQuery);
 projects.post("/api/v1/projects/:ref/analytics/query/:name", handleAnalyticsQuery);
+
+// [console fork] The project's S3-protocol credentials (the storage S3 endpoint's static
+// sigv4 keys, derived from the JWT secret). Single-tenant storage exposes no access-key
+// management API, so "S3 access keys" in the dashboard ARE this one project-scoped pair —
+// the S3-vectors FDW and external S3 clients sign against /storage/v1/s3 with them. Authorized
+// like every project route; a member already holds the service_role key, so this is no
+// escalation. The secret is deterministic, so returning it is safe (not a one-time reveal).
+projects.get("/api/v1/projects/:ref/s3-credentials", async (c) => {
+  await requireSession(c);
+  const ref = c.req.param("ref");
+  const row = await getProjectByRef(ref);
+  if (!row) throw new AppError(404, "project_not_found", "Project not found");
+  await requirePermission(c, row.organizationId, { project: ["content"] });
+  const secrets = await getProjectSecrets(row.id);
+  if (!secrets) throw new AppError(404, "project_secrets_not_found", "Project secrets not found");
+  const creds = deriveS3ProtocolCreds(secrets.jwtSecret);
+  return c.json({ accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey });
+});
 
 // [console fork] Per-project GoTrue auth-config (the Authentication settings pages).
 // Supabase keeps this in its platform DB; we store it on the project so buildStack can apply

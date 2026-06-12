@@ -69,7 +69,13 @@ export class SharedInfraProvisioner implements Provisioner {
       storageConfig: project.storageConfig as { fileSizeLimit?: number } | null,
     });
     const dir = writeStack(project.ref, { composeYaml, env });
-    await getComposeRunner().up(dir, name(project.ref));
+    const runner = getComposeRunner();
+    await runner.up(dir, name(project.ref));
+    // writeStack re-copies the edge-runtime main router (volumes/functions/main/index.ts), but
+    // the runtime caches the main worker, so `up` alone keeps the OLD router. Force-recreate the
+    // functions container so console-side router fixes (e.g. the per-function JWT check) actually
+    // take effect on reconfigure. Cheap + stateless; user functions live in the same volume.
+    await runner.recreate?.(dir, name(project.ref), ["functions"]).catch(() => {});
   }
 
   async pause(project: Project): Promise<void> {

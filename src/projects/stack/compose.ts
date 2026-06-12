@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse, stringify } from "yaml";
 import type { ProjectSecretValues } from "../secrets";
-import { derivePublishableKey, deriveSecretKey, deriveSigningKeys } from "../secrets";
+import { derivePublishableKey, deriveSecretKey, deriveSigningKeys, deriveS3ProtocolCreds } from "../secrets";
 import { readStandbyKeys } from "../signing-keys-store";
 import { STACK_ENV_DEFAULTS } from "./env-defaults";
 
@@ -117,14 +117,10 @@ export async function buildStack(
     DOCKER_SOCKET_LOCATION: "/var/run/docker.sock",
     // S3-protocol credentials for the storage service's S3-compatible endpoint. The upstream
     // .env.example ships fixed, publicly-known values — leaving those in place would let anyone
-    // access any project's storage over /storage/v1/s3. Derive per-project instead.
-    S3_PROTOCOL_ACCESS_KEY_ID: createHmac("sha256", input.secrets.jwtSecret)
-      .update("s3_protocol_key_id_v1")
-      .digest("hex")
-      .slice(0, 32),
-    S3_PROTOCOL_ACCESS_KEY_SECRET: createHmac("sha256", input.secrets.jwtSecret)
-      .update("s3_protocol_key_secret_v1")
-      .digest("hex"),
+    // access any project's storage over /storage/v1/s3. Derive per-project instead (the
+    // S3-access-keys API surface returns the same values via deriveS3ProtocolCreds).
+    S3_PROTOCOL_ACCESS_KEY_ID: deriveS3ProtocolCreds(input.secrets.jwtSecret).accessKeyId,
+    S3_PROTOCOL_ACCESS_KEY_SECRET: deriveS3ProtocolCreds(input.secrets.jwtSecret).secretAccessKey,
   };
 
   // Data API disabled: don't expose the user's `public` schema over REST.

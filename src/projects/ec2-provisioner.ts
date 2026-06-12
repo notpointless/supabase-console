@@ -555,6 +555,12 @@ export class Ec2Provisioner implements Provisioner {
     const envB64 = Buffer.from(envLines, "utf8").toString("base64");
     const script = `#!/bin/bash
 set -euxo pipefail
+# [console fork] Pull console-managed template files (the edge-runtime main router, kong.yml,
+# vector.yml, compose overlays) from the fork branch so console-side fixes — e.g. the
+# per-function JWT security fix — reach EXISTING instances, not just freshly-provisioned ones.
+# User-deployed functions live in UNTRACKED volumes/functions/<slug>, so a fast-forward pull
+# leaves them untouched. Best-effort: a diverged/offline checkout must not fail reconfigure.
+git -C /opt/supabase pull --ff-only origin "${SUPABASE_FORK_BRANCH}" || true
 cd /opt/supabase/docker
 cp .env.example .env
 echo "" >> .env
@@ -566,7 +572,10 @@ IP=$(curl -fsS http://169.254.169.254/latest/meta-data/public-ipv4 || echo local
   echo "SITE_URL=http://$IP:8000"
 } >> .env
 # COMPOSE_FILE comes from the injected env (base + logs [+ caddy]); no -f flags.
-docker compose up -d`;
+docker compose up -d
+# The edge-runtime caches the main router, so recreate it to pick up an updated main/index.ts
+# (e.g. the JWT fix). Cheap + stateless; per-function metadata toggles are already live.
+docker compose up -d --force-recreate --no-deps functions 2>/dev/null || true`;
     await runCommand(ssm, instanceIdOf(project), script);
   }
 

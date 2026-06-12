@@ -44,6 +44,19 @@ export function deriveSecretKey(jwtSecret: string): string {
   return `sb_secret_${sig}`;
 }
 
+// [console fork] The project's static S3-protocol credentials — what the storage container's
+// S3 endpoint (/storage/v1/s3, sigv4) validates against. Derived from the JWT secret so they're
+// stable across (re)provision and never stored. compose.ts injects the SAME values into the
+// storage env; the S3-access-keys surface returns them so clients (incl. the S3-vectors FDW)
+// can sign requests to the project's own S3 endpoint without a separate key-management API
+// (which single-tenant storage doesn't expose).
+export function deriveS3ProtocolCreds(jwtSecret: string): { accessKeyId: string; secretAccessKey: string } {
+  return {
+    accessKeyId: createHmac("sha256", jwtSecret).update("s3_protocol_key_id_v1").digest("hex").slice(0, 32),
+    secretAccessKey: createHmac("sha256", jwtSecret).update("s3_protocol_key_secret_v1").digest("hex"),
+  };
+}
+
 const b64url = (b: Buffer): string => b.toString("base64url");
 
 /**

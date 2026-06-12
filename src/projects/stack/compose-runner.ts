@@ -7,6 +7,8 @@ export interface ComposeRunner {
   start(dir: string, project: string): Promise<void>;
   down(dir: string, project: string): Promise<void>;
   restart(dir: string, project: string, services?: string[]): Promise<void>;
+  // Force-recreate specific services (optional; degrades to a no-op on mocks that omit it).
+  recreate?(dir: string, project: string, services: string[]): Promise<void>;
 }
 
 export type Exec = (cmd: string, args: string[]) => Promise<void>;
@@ -41,6 +43,9 @@ export class DockerComposeRunner implements ComposeRunner {
   down(dir: string, project: string) { return this.exec("docker", [...this.base(dir, project), "down", "-v"]); }
   restart(dir: string, project: string, services: string[] = []) {
     return this.exec("docker", [...this.base(dir, project), "restart", ...services]);
+  }
+  recreate(dir: string, project: string, services: string[]) {
+    return this.exec("docker", [...this.base(dir, project), "up", "-d", "--force-recreate", "--no-deps", ...services]);
   }
 }
 
