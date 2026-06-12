@@ -12,21 +12,38 @@ process.on("unhandledRejection", (reason) => {
   console.error("[unhandledRejection]", reason);
 });
 process.on("uncaughtException", (err) => {
+  // Stay up through unexpected async errors (a dropped background job must never take down
+  // auth). Port-bind errors are handled by the listen retry below, not here.
   console.error("[uncaughtException]", err);
-  // A failure to BIND the port (EADDRINUSE when tsx-watch restarts before the old process
-  // frees :3000, or EACCES) must be FATAL — swallowing it leaves a zombie that holds the
-  // port but can't serve, so the real server never binds and the BFF gets ECONNREFUSED
-  // ("API error communicating with the server"). Exit so the supervisor starts cleanly.
-  const code = (err as NodeJS.ErrnoException)?.code;
-  if (code === "EADDRINUSE" || code === "EACCES") {
-    console.error(`[uncaughtException] fatal listen error ${code} — exiting for a clean restart`);
-    process.exit(1);
-  }
 });
 
-serve({ fetch: app.fetch, port: getEnv().PORT }, (info) => {
-  console.log(`supabase-console listening on http://localhost:${info.port}`);
-});
+// [console fork] Bind with a short retry on EADDRINUSE. tsx-watch reloads on every file edit by
+// killing the old process and spawning a new one; the old process can still hold :3000 for a
+// moment, so a naive bind fails with EADDRINUSE. Previously the server EXITED on that — but
+// tsx-watch does NOT respawn a process that exits on its own, so a single reload race left the
+// control plane (and therefore login) down until the next file change. Retrying the bind lets a
+// reload self-heal; only a non-transient error (e.g. EACCES) is fatal.
+const PORT = getEnv().PORT;
+function listen(attempt = 0): void {
+  const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
+    console.log(`supabase-console listening on http://localhost:${info.port}`);
+  });
+  (server as unknown as { on?: (e: string, cb: (err: NodeJS.ErrnoException) => void) => void }).on?.(
+    "error",
+    (err) => {
+      if (err.code === "EADDRINUSE" && attempt < 30) {
+        if (attempt % 4 === 0) {
+          console.warn(`[listen] :${PORT} busy (EADDRINUSE) — retrying (attempt ${attempt + 1})`);
+        }
+        setTimeout(() => listen(attempt + 1), 500);
+      } else {
+        console.error(`[listen] fatal ${err.code ?? err.message} — exiting`);
+        process.exit(1);
+      }
+    }
+  );
+}
+listen();
 
 startWorker().catch((err) => {
   console.error("worker failed to start", err);
