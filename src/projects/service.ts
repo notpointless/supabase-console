@@ -147,6 +147,12 @@ export async function getProjectMetrics(ref: string) {
   const row = await getProjectByRef(ref);
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   if (row.infrastructureType === "shared") return { infra: "shared" as const };
+  // A paused/stopped instance has no live metrics, and the SSM RAM/disk probe would just fail
+  // against a stopped instance (fast, but a doomed AWS round-trip on every poll). Short-circuit
+  // to zeros so a paused EC2 project's monitoring reads cleanly instead of churning failed calls.
+  if (row.status !== "active") {
+    return { infra: "ec2" as const, cpuPercent: 0, ramUsed: 0, ramTotal: 0, diskUsed: 0, diskSize: 0 };
+  }
   const p = getProvisionerFor(row);
   const m = p.getMetrics ? await p.getMetrics(row) : { cpuPercent: 0, ramUsed: 0, ramTotal: 0, diskUsed: 0, diskSize: 0 };
   return { infra: "ec2" as const, ...m };
