@@ -115,6 +115,17 @@ export const taskList = {
         .where(eq(project.ref, ref));
     }
   },
+  // [console fork] Apply an EC2 disk (EBS) resize: online ModifyVolume + wait + SSM filesystem
+  // grow. Async (this task) so the HTTP request returns immediately instead of blocking minutes.
+  resize_disk: async (payload: unknown): Promise<void> => {
+    const { ref, cfg } = payload as {
+      ref: string;
+      cfg: { sizeGb: number; iops: number; throughput: number; type: string };
+    };
+    const row = await loadByRef(ref);
+    if (!row) return;
+    await getProvisionerFor(row).resizeDisk?.(row, cfg);
+  },
   delete: async (payload: unknown): Promise<void> => {
     const { ref } = payload as { ref: string };
     const row = await loadByRef(ref);

@@ -180,7 +180,11 @@ export async function resizeProjectDisk(
   const sizeGb = Math.max(8, Math.min(16384, Math.floor(cfg.sizeGb)));
   const iops = Math.max(3000, Math.min(16000, Math.floor(cfg.iops)));
   const throughput = Math.max(125, Math.min(1000, Math.floor(cfg.throughput)));
-  await p.resizeDisk(row, { sizeGb, iops, throughput, type: cfg.type || "gp3" });
+  // Run ASYNC: AWS ModifyVolume + the volume-modification wait + the SSM filesystem grow take
+  // minutes, which would block the HTTP request long past the dashboard's timeout ("API error").
+  // Disk resize is an ONLINE operation (no stop), so the project stays usable throughout and no
+  // transitional status is needed — the disk page polls the live config to reflect the new size.
+  await getQueue().enqueue("resize_disk", { ref, cfg: { sizeGb, iops, throughput, type: cfg.type || "gp3" } });
 }
 
 export async function restartProject(ref: string, services?: string[]): Promise<void> {
