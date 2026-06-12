@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { project, type Project } from "../db/schema";
 import { AppError } from "../http/error";
-import { assertPublicHttpsUrl } from "../http/url-guard";
+import { assertFetchableUrl } from "../http/url-guard";
 
 // [console fork] Third-Party Auth: register external JWT issuers (Firebase, Auth0, Cognito,
 // any OIDC provider) so the project's data API will VERIFY tokens they sign. Supabase stores
@@ -51,7 +51,7 @@ async function resolveJwks(input: TpaInput): Promise<{ keys: unknown[] }> {
   let jwksUrl = input.jwks_url;
   if (!jwksUrl && input.oidc_issuer_url) {
     const disc = input.oidc_issuer_url.replace(/\/+$/, "") + "/.well-known/openid-configuration";
-    assertPublicHttpsUrl(disc);
+    await assertFetchableUrl(disc);
     const r = await fetch(disc).catch(() => null);
     const j = r && r.ok ? ((await r.json().catch(() => null)) as { jwks_uri?: string } | null) : null;
     jwksUrl = j?.jwks_uri;
@@ -64,7 +64,7 @@ async function resolveJwks(input: TpaInput): Promise<{ keys: unknown[] }> {
   }
 
   // Validate even a discovery-supplied jwks_uri (a hostile issuer could point it inward).
-  assertPublicHttpsUrl(jwksUrl);
+  await assertFetchableUrl(jwksUrl);
   const r = await fetch(jwksUrl).catch(() => null);
   if (!r || !r.ok) throw new AppError(400, "jwks_fetch_failed", `Could not fetch the JWKS from ${jwksUrl}`);
   const j = (await r.json().catch(() => null)) as { keys?: unknown } | null;

@@ -2,7 +2,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../db/client";
 import { auditLogDrain } from "../db/schema";
 import type { AuditLogDrain } from "../db/schema";
-import { isPublicHttpsUrl } from "../http/url-guard";
+import { assertFetchableUrl } from "../http/url-guard";
 
 export interface AuditEvent {
   actor_user_id: string | null;
@@ -79,8 +79,11 @@ async function postToWebhook(
   const url = typeof config.url === "string" ? config.url : "";
   if (!url) return { ok: false, error: "Drain has no URL configured" };
   // [console fork] SSRF guard: a tenant admin configures this URL, so the control plane must not
-  // POST audit events to its own internal network / the metadata endpoint.
-  if (!isPublicHttpsUrl(url)) {
+  // POST audit events to its own internal network / the metadata endpoint. Resolve-and-pin here
+  // (not just the literal check) so a public hostname that resolves to a private IP is blocked.
+  try {
+    await assertFetchableUrl(url);
+  } catch {
     return { ok: false, error: "Drain URL must be a public https endpoint" };
   }
   const headers: Record<string, string> = { "Content-Type": "application/json" };
