@@ -50,6 +50,7 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
       : (input.computeSize ?? "medium");
   const ref = generateRef();
   const secrets = await generateProjectSecrets();
+  let createdRow: Project | undefined;
   await db.transaction(async (tx) => {
     const [row] = await tx.insert(project).values({
       ref,
@@ -67,9 +68,14 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
       createdBy: input.createdBy,
     }).returning();
     await tx.insert(projectSecrets).values(encryptedSecretColumns(row!.id, secrets));
+    createdRow = row!;
   });
   await getQueue().enqueue("provision", { ref });
-  return (await getProjectByRef(ref))!;
+  // Re-fetch so a SYNCHRONOUS queue (inline mode) reflects the provision result (e.g. "active").
+  // But a failed inline provision rolls the row back (deletes it), so fall back to the inserted
+  // snapshot instead of `!`-asserting a now-missing row into undefined (which crashed the route).
+  // The async production queue hasn't run provision yet, so the re-fetch returns "provisioning".
+  return (await getProjectByRef(ref)) ?? createdRow!;
 }
 
 export async function getProjectByRef(ref: string): Promise<Project | undefined> {

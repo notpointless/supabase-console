@@ -28,12 +28,16 @@ describe("shared provisioning via worker", () => {
     expect(JSON.stringify(p)).not.toMatch(/dbPasswordEncrypted|jwt|service_role/i);
   });
 
-  it("provision failure marks the project failed", async () => {
+  it("provision failure rolls the project back (no half-provisioned row left behind)", async () => {
     setComposeRunner({ up: async () => { throw new Error("docker down"); }, stop: async () => {}, start: async () => {}, down: async () => {}, restart: async () => {} });
     const cookie = await owner();
     const orgId = await org(cookie);
     const p = await (await app.request(`/api/v1/organizations/${orgId}/projects`, json({ name: "P", region: "shared", dbPassword: "supersecret123" }, cookie))).json();
-    expect(p.status).toBe("failed");
-    expect(p.failureReason).toContain("docker down");
+    // The inline provision failed and rolled back: the create response is the pre-provision
+    // snapshot, but the project no longer exists — fetching it 404s and the org has no projects.
+    const get = await app.request(`/api/v1/projects/${p.ref}`, { headers: { cookie } });
+    expect(get.status).toBe(404);
+    const list = await (await app.request(`/api/v1/organizations/${orgId}/projects`, { headers: { cookie } })).json();
+    expect(list.projects).toHaveLength(0);
   });
 });

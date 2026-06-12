@@ -31,12 +31,20 @@ describe("InlineQueue + provision task", () => {
     expect((row!.connection as { ref: string }).ref).toBe(ref);
   });
 
-  it("provision failure marks the project failed", async () => {
+  it("provision failure rolls back — the project row is removed", async () => {
+    // A failed provision must not leave a half-provisioned project behind: the task tears
+    // down any partial resources (delete) and removes the row entirely.
     const { ref } = await seed();
-    setProvisioner({ provision: async () => { throw new Error("boom"); }, pause: async () => {}, resume: async () => {}, delete: async () => {} });
+    let deleteCalled = false;
+    setProvisioner({
+      provision: async () => { throw new Error("boom"); },
+      pause: async () => {},
+      resume: async () => {},
+      delete: async () => { deleteCalled = true; },
+    });
     await new InlineQueue().enqueue("provision", { ref });
     const [row] = await db.select().from(project).where(eq(project.ref, ref));
-    expect(row!.status).toBe("failed");
-    expect(row!.failureReason).toContain("boom");
+    expect(row).toBeUndefined();
+    expect(deleteCalled).toBe(true);
   });
 });
