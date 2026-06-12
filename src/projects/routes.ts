@@ -37,7 +37,7 @@ import {
   getCustomHostname,
   initializeCustomHostname,
   reverifyCustomHostname,
-  activateCustomHostname,
+  assertActivatableCustomHostname,
   deleteCustomHostname,
 } from "./custom-hostname";
 import { readFileSync } from "node:fs";
@@ -196,7 +196,13 @@ projects.post("/api/v1/projects/:ref/custom-hostname/activate", async (c) => {
   const row = await getProjectByRef(ref);
   if (!row) throw new AppError(404, "project_not_found", "Project not found");
   await requirePermission(c, row.organizationId, { project: ["update"] });
-  return c.json(await activateCustomHostname(row));
+  // Enabling Caddy runs `docker compose up` over SSM (pulls the caddy image on first use) — too
+  // slow to block the request past the dashboard's timeout ("API error"). Validate cheaply, then
+  // enqueue and return the current state; the Custom Domains page polls and flips to active when
+  // the job finishes. The per-project queue serializes it behind any other in-flight infra op.
+  assertActivatableCustomHostname(row);
+  await getQueue().enqueue("activate_custom_hostname", { ref });
+  return c.json(await getCustomHostname(row));
 });
 
 projects.delete("/api/v1/projects/:ref/custom-hostname", async (c) => {

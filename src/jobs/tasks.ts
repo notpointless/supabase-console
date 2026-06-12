@@ -115,6 +115,16 @@ export const taskList = {
         .where(eq(project.ref, ref));
     }
   },
+  // [console fork] Enable Caddy/TLS for a custom hostname over SSM (docker compose up — pulls
+  // the caddy image on first use). Async so the request doesn't block past the dashboard timeout;
+  // the Custom Domains page polls and flips to active when this finishes.
+  activate_custom_hostname: async (payload: unknown): Promise<void> => {
+    const { ref } = payload as { ref: string };
+    const row = await loadByRef(ref);
+    if (!row) return;
+    const { activateCustomHostname } = await import("../projects/custom-hostname.js");
+    await activateCustomHostname(row);
+  },
   // [console fork] Apply an EC2 disk (EBS) resize: online ModifyVolume + wait + SSM filesystem
   // grow. Async (this task) so the HTTP request returns immediately instead of blocking minutes.
   resize_disk: async (payload: unknown): Promise<void> => {

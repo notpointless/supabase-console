@@ -194,7 +194,10 @@ export async function reverifyCustomHostname(p: Project) {
   );
 }
 
-export async function activateCustomHostname(p: Project) {
+// Cheap pre-flight guards for activation (dedicated infra, running instance, a configured
+// hostname) — run synchronously in the route so the user gets immediate feedback before the
+// slow SSM work is enqueued.
+export function assertActivatableCustomHostname(p: Project): void {
   ensureDedicated(p);
   // The Caddy enable runs over SSM — the instance must be running.
   if (p.status !== "active") {
@@ -202,6 +205,11 @@ export async function activateCustomHostname(p: Project) {
   }
   const s = p.customHostname as CustomHostnameState | null;
   if (!s?.hostname) throw new AppError(404, "no_hostname", "custom hostname configuration not found");
+}
+
+export async function activateCustomHostname(p: Project) {
+  assertActivatableCustomHostname(p);
+  const s = p.customHostname as CustomHostnameState;
   const { ec2, ssm } = await ec2For(p);
   // Open 80 + 443 (Let's Encrypt HTTP-01 + HTTPS) on the shared SG (idempotent).
   const sg = await ec2.send(
