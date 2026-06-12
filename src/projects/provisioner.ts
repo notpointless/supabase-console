@@ -51,7 +51,8 @@ export interface Provisioner {
   resizeDisk?(project: Project, cfg: DiskConfig): Promise<void>;
 }
 
-// Phase-2 stand-in for the real engine (Phase 3 replaces this).
+// Test double only — never used in production. getProvisionerFor() returns the real
+// SharedInfraProvisioner / Ec2Provisioner unless a test injects this via setProvisioner().
 export class StubProvisioner implements Provisioner {
   async provision(project: Project): Promise<ProvisionResult> {
     return { connection: { host: `db.${project.ref}.stub.local`, port: 5432, ref: project.ref } };
