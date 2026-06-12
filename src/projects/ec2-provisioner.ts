@@ -25,7 +25,7 @@ import {
 
 import { CloudWatchClient, GetMetricStatisticsCommand } from "@aws-sdk/client-cloudwatch";
 import { IAMClient } from "@aws-sdk/client-iam";
-import { SSMClient } from "@aws-sdk/client-ssm";
+import { SSMClient, DescribeInstanceInformationCommand } from "@aws-sdk/client-ssm";
 import { ensureInstanceRole, deleteInstanceRole, runCommand } from "./ec2-ssm";
 import type { Provisioner, ProvisionResult, Connection, DiskConfig } from "./provisioner";
 import type { Project } from "../db/schema";
@@ -443,6 +443,27 @@ export class Ec2Provisioner implements Provisioner {
     }
   }
 
+  // After a start (resume / resize) the instance reaches "running" well before its SSM agent
+  // re-registers — for ~30-90s SendCommand fails with InvalidInstanceId. Wait until the agent
+  // reports Online so a post-start reconfigure (which re-applies config edited while paused)
+  // actually runs instead of failing. On a project that's already up the first poll returns
+  // immediately. Best-effort: give up after ~3 min and let the SSM call try regardless.
+  private async waitForSsmReady(ssm: SSMClient, instanceId: string): Promise<void> {
+    for (let i = 0; i < 36; i++) {
+      try {
+        const out = await ssm.send(
+          new DescribeInstanceInformationCommand({
+            Filters: [{ Key: "InstanceIds", Values: [instanceId] }],
+          })
+        );
+        if (out.InstanceInformationList?.[0]?.PingStatus === "Online") return;
+      } catch {
+        // transient describe error — keep polling
+      }
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
+
   private async waitForPublicHost(ec2: EC2Client, instanceId: string): Promise<string> {
     for (let i = 0; i < 60; i++) {
       try {
@@ -576,6 +597,9 @@ docker compose up -d
 # The edge-runtime caches the main router, so recreate it to pick up an updated main/index.ts
 # (e.g. the JWT fix). Cheap + stateless; per-function metadata toggles are already live.
 docker compose up -d --force-recreate --no-deps functions 2>/dev/null || true`;
+    // Wait for the SSM agent before firing the script — on resume/resize the instance is freshly
+    // started and the agent may not have re-registered yet (SendCommand would fail otherwise).
+    await this.waitForSsmReady(ssm, instanceIdOf(project));
     await runCommand(ssm, instanceIdOf(project), script);
     // Re-seed edge-function secrets from the DB onto the (now-running) instance, so a secret
     // changed while it was stopped reaches the volume on resume. Best-effort.
