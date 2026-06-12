@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, lt, inArray, sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { project } from "../db/schema";
 import { getProvisionerFor } from "../projects/provisioner";
@@ -6,6 +6,29 @@ import { getProvisionerFor } from "../projects/provisioner";
 async function loadByRef(ref: string) {
   const [row] = await db.select().from(project).where(eq(project.ref, ref));
   return row;
+}
+
+// [console fork] HANG PROTECTION.
+//
+// Jobs run on a per-project serialized queue (queue.ts). graphile-worker locks both the JOB and
+// the QUEUE while a worker processes it. If that worker dies UNGRACEFULLY (crash / kill / a
+// `docker` op that hangs), those locks are left set and graphile won't reissue them — nor any
+// LATER job in the same per-project queue — until a multi-hour TTL. The visible symptom: a
+// project stuck "coming up", or a delete/reconfigure that never runs.
+//
+// releaseStaleLocks() clears locks older than `minutes` (orphaned by a dead worker). Called on
+// startup (worker.ts) with a short window — on a fresh start nothing is legitimately running, so
+// any existing lock is from the previous, now-dead pool — and periodically by the reaper with a
+// generous window so an actively-running long job (e.g. a physical restore) is never disturbed.
+export async function releaseStaleLocks(minutes: number): Promise<void> {
+  await db.execute(
+    sql`update graphile_worker._private_job_queues set locked_at = null, locked_by = null
+        where locked_at is not null and locked_at < now() - make_interval(mins => ${minutes})`
+  );
+  await db.execute(
+    sql`update graphile_worker._private_jobs set locked_at = null, locked_by = null
+        where locked_at is not null and locked_at < now() - make_interval(mins => ${minutes})`
+  );
 }
 
 export const taskList = {
@@ -255,6 +278,53 @@ export const taskList = {
           // best-effort
         }
       }
+    }
+  },
+
+  // [console fork] HANG PROTECTION reaper — runs on a schedule (worker.ts crontab). See
+  // releaseStaleLocks() above for the failure mode it guards against. Two layers:
+  reap_stuck_projects: async (): Promise<void> => {
+    // 1) Free locks orphaned by a worker that died ungracefully, so a per-project queue blocked
+    //    behind a dead lock (e.g. a delete that can never run) drains. 20 min is far beyond any
+    //    normal op; only a large physical restore runs longer, and that legitimately holds its
+    //    OWN project's queue — which we must not interrupt, hence the generous window.
+    await releaseStaleLocks(20);
+
+    const cutoff = new Date(Date.now() - 20 * 60 * 1000);
+
+    // 2a) A project stuck "provisioning" never came up — destroy the half-built stack and drop the
+    //     row (same contract as a failed provision: never leave a project behind). updatedAt is the
+    //     create time until provision finishes, so this only fires once it's genuinely wedged.
+    const wedgedProvisioning = await db
+      .select()
+      .from(project)
+      .where(and(eq(project.status, "provisioning"), lt(project.updatedAt, cutoff)));
+    for (const row of wedgedProvisioning) {
+      console.error(`[reaper] destroying stuck-provisioning project ${row.ref} (no progress >20m)`);
+      try {
+        await getProvisionerFor(row).delete(row);
+      } catch (err) {
+        console.error(`[reaper] teardown failed for ${row.ref}`, err);
+      }
+      await db.delete(project).where(eq(project.id, row.id));
+    }
+
+    // 2b) A project wedged mid resume/restore HAS data — never destroy it. Flag it failed so the UI
+    //     stops spinning and the user can retry the operation.
+    const wedgedOps = await db
+      .select()
+      .from(project)
+      .where(and(inArray(project.status, ["resuming", "restoring"]), lt(project.updatedAt, cutoff)));
+    for (const row of wedgedOps) {
+      console.error(`[reaper] flagging stuck ${row.status} project ${row.ref} as failed (retryable)`);
+      await db
+        .update(project)
+        .set({
+          status: "failed",
+          failureReason: `${row.status} timed out — automatically recovered (hang protection)`,
+          updatedAt: new Date(),
+        })
+        .where(eq(project.id, row.id));
     }
   },
 };
