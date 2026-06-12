@@ -466,7 +466,9 @@ services:
       SUPABASE_PUBLISHABLE_KEYS: "{\"default\":\"${SUPABASE_PUBLISHABLE_KEY:-}\"}"
       SUPABASE_SECRET_KEYS: "{\"default\":\"${SUPABASE_SECRET_KEY:-}\"}"
       SUPABASE_DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
-      # TODO: Allow configuring VERIFY_JWT per function.
+      # [console fork] JWT verification is now PER-FUNCTION (the main router reads each
+      # function's .metadata.json verify_jwt, secure-by-default true). This global is left
+      # only as a legacy knob; the router no longer relies on it.
       VERIFY_JWT: "${FUNCTIONS_VERIFY_JWT}"
     command:
       [

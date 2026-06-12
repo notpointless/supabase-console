@@ -105,7 +105,35 @@ async function isValidHybridJWT(jwt: string): Promise<boolean> {
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method !== 'OPTIONS' && VERIFY_JWT) {
+  const url = new URL(req.url)
+  const { pathname } = url
+  const path_parts = pathname.split('/')
+  const service_name = path_parts[1]
+
+  if (!service_name || service_name === '') {
+    const error = { msg: 'missing function name in request' }
+    return new Response(JSON.stringify(error), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  // [console fork] PER-FUNCTION JWT enforcement, SECURE BY DEFAULT. The dashboard writes
+  // verify_jwt into the function's .metadata.json on deploy (default true) — honour it. A
+  // function with no metadata requires a JWT (you must explicitly opt out by setting
+  // verify_jwt:false), so a missing/corrupt file can never silently open a function. Read
+  // per-request so a toggle applies live, like the secrets file below.
+  let verifyJwt = true
+  try {
+    const meta = JSON.parse(
+      await Deno.readTextFile(`/home/deno/functions/${service_name}/.metadata.json`)
+    )
+    if (typeof meta.verify_jwt === 'boolean') verifyJwt = meta.verify_jwt
+  } catch (_e) {
+    /* no metadata — keep the secure default (require a JWT) */
+  }
+
+  if (req.method !== 'OPTIONS' && verifyJwt) {
     try {
       const token = getAuthToken(req)
       const isValidJWT = await isValidHybridJWT(token);
@@ -123,19 +151,6 @@ Deno.serve(async (req: Request) => {
         headers: { 'Content-Type': 'application/json' },
       })
     }
-  }
-
-  const url = new URL(req.url)
-  const { pathname } = url
-  const path_parts = pathname.split('/')
-  const service_name = path_parts[1]
-
-  if (!service_name || service_name === '') {
-    const error = { msg: 'missing function name in request' }
-    return new Response(JSON.stringify(error), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    })
   }
 
   const servicePath = `/home/deno/functions/${service_name}`
