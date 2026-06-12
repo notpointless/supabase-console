@@ -577,6 +577,10 @@ docker compose up -d
 # (e.g. the JWT fix). Cheap + stateless; per-function metadata toggles are already live.
 docker compose up -d --force-recreate --no-deps functions 2>/dev/null || true`;
     await runCommand(ssm, instanceIdOf(project), script);
+    // Re-seed edge-function secrets from the DB onto the (now-running) instance, so a secret
+    // changed while it was stopped reaches the volume on resume. Best-effort.
+    const { seedFunctionSecrets } = await import("./function-secrets.js");
+    await seedFunctionSecrets(project).catch(() => {});
   }
 
   // Change compute: stop -> change instance type (requires stopped) -> start. The

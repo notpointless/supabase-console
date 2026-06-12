@@ -35,7 +35,7 @@ export async function setFunctionSecrets(project: Project, secrets: SecretInput[
         set: { valueEncrypted: encrypt(s.value), updatedAt: new Date() },
       });
   }
-  await writeSecretsFile(project);
+  await seedFunctionSecrets(project);
 }
 
 export async function deleteFunctionSecrets(project: Project, names: string[]): Promise<void> {
@@ -44,12 +44,16 @@ export async function deleteFunctionSecrets(project: Project, names: string[]): 
       .delete(projectFunctionSecret)
       .where(and(eq(projectFunctionSecret.projectId, project.id), eq(projectFunctionSecret.name, n)));
   }
-  await writeSecretsFile(project);
+  await seedFunctionSecrets(project);
 }
 
-// Write the decrypted secrets to the functions volume's .secrets.json. The main
-// router merges this into every function's env per-request (live, no restart).
-async function writeSecretsFile(project: Project): Promise<void> {
+// Write the decrypted secrets (from the DB, the source of truth) to the functions volume's
+// .secrets.json. The main router merges this into every function's env per-request (live, no
+// restart). Exported so reconfigure can re-seed it: the file lives on the project's volume
+// (shared) / the instance's EBS volume (EC2), so it persists across pause/resume — but a
+// secret CHANGED while a dedicated instance is stopped can't be pushed over SSM, so every
+// reconfigure (which runs on resume) re-seeds the file from the DB to converge.
+export async function seedFunctionSecrets(project: Project): Promise<void> {
   const rows = await db
     .select()
     .from(projectFunctionSecret)
@@ -66,21 +70,24 @@ async function writeSecretsFile(project: Project): Promise<void> {
     return;
   }
 
-  // Dedicated (EC2): write the file on the instance over SSM. It mounts into the
-  // functions container at /home/deno/functions/.secrets.json (the main router reads
-  // it per-request). If the instance isn't recorded yet (still provisioning), skip —
-  // the file is seeded again on the next secret change.
+  // Dedicated (EC2): write the file on the instance over SSM. Best-effort — if the instance
+  // isn't recorded yet (provisioning) or is stopped/unreachable (paused), skip without error:
+  // the DB already holds the secret and the next reconfigure (on resume) re-seeds the file.
   const instanceId = (project.connection as { instanceId?: string } | null)?.instanceId;
   if (!instanceId) return;
-  const creds = await getCredentials(project.organizationId);
-  const ssm = new SSMClient({
-    region: project.region,
-    credentials: { accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey },
-  });
-  const b64 = Buffer.from(json, "utf8").toString("base64");
-  await runCommand(
-    ssm,
-    instanceId,
-    `mkdir -p /opt/supabase/docker/volumes/functions && echo ${b64} | base64 -d > /opt/supabase/docker/volumes/functions/.secrets.json`
-  );
+  try {
+    const creds = await getCredentials(project.organizationId);
+    const ssm = new SSMClient({
+      region: project.region,
+      credentials: { accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey },
+    });
+    const b64 = Buffer.from(json, "utf8").toString("base64");
+    await runCommand(
+      ssm,
+      instanceId,
+      `mkdir -p /opt/supabase/docker/volumes/functions && echo ${b64} | base64 -d > /opt/supabase/docker/volumes/functions/.secrets.json`
+    );
+  } catch {
+    // instance stopped / unreachable — the DB is the source of truth; reconfigure re-seeds.
+  }
 }

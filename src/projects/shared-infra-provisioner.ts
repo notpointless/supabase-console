@@ -69,6 +69,10 @@ export class SharedInfraProvisioner implements Provisioner {
       storageConfig: project.storageConfig as { fileSizeLimit?: number } | null,
     });
     const dir = writeStack(project.ref, { composeYaml, env });
+    // Re-seed edge-function secrets from the DB so the .secrets.json on the volume converges
+    // to the stored secrets (covers a secret changed while the stack was down).
+    const { seedFunctionSecrets } = await import("./function-secrets.js");
+    await seedFunctionSecrets(project).catch(() => {});
     const runner = getComposeRunner();
     await runner.up(dir, name(project.ref));
     // writeStack re-copies the edge-runtime main router (volumes/functions/main/index.ts), but
