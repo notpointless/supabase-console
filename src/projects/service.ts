@@ -127,8 +127,17 @@ export async function resizeProject(ref: string, computeSize: string): Promise<v
   if (row.infrastructureType === "shared") {
     throw new AppError(400, "not_dedicated", "Compute resize is only available for dedicated (AWS EC2) projects");
   }
+  if (row.status !== "active" && row.status !== "paused") {
+    throw new AppError(409, "project_busy", `Project is ${row.status}; wait for it to settle before resizing`);
+  }
   const size = MIN_DEDICATED_COMPUTE.has(computeSize) ? computeSize : "medium";
-  await db.update(project).set({ computeSize: size, updatedAt: new Date() }).where(eq(project.ref, ref));
+  // Mark the project busy: the resize stops/starts the instance for several minutes, so it
+  // must not keep showing ACTIVE_HEALTHY (and the transitional status lets the job no-op a
+  // duplicate, and serializes behind any in-flight op via the per-project queue).
+  await db
+    .update(project)
+    .set({ computeSize: size, status: "resuming", updatedAt: new Date() })
+    .where(eq(project.id, row.id));
   await getQueue().enqueue("resize_compute", { ref });
 }
 

@@ -93,14 +93,26 @@ export const taskList = {
     await db.update(project).set({ updatedAt: new Date() }).where(eq(project.ref, ref));
   },
   resize_compute: async (payload: unknown): Promise<void> => {
-    // Resize the dedicated instance to the project's current computeSize. The public
-    // host changes on stop/start, so persist the returned connection.
+    // Resize the dedicated instance to the project's current computeSize. The route flips the
+    // project to "resuming" first; we put it back to "active" on success (persisting the fresh
+    // connection — the public host can change on stop/start) or "failed" on error, so a resize
+    // that dies mid-way doesn't leave the project showing ACTIVE_HEALTHY while the instance is
+    // stopped. Guard on "resuming" so a duplicate job no-ops instead of re-stopping a live box.
     const { ref } = payload as { ref: string };
     const row = await loadByRef(ref);
     if (!row) return;
-    const conn = await getProvisionerFor(row).resize?.(row);
-    if (conn) {
-      await db.update(project).set({ connection: conn, updatedAt: new Date() }).where(eq(project.ref, ref));
+    if (row.status !== "resuming") return;
+    try {
+      const conn = await getProvisionerFor(row).resize?.(row);
+      await db
+        .update(project)
+        .set({ status: "active", ...(conn ? { connection: conn } : {}), failureReason: null, updatedAt: new Date() })
+        .where(eq(project.ref, ref));
+    } catch (e) {
+      await db
+        .update(project)
+        .set({ status: "failed", failureReason: e instanceof Error ? e.message : "compute resize failed", updatedAt: new Date() })
+        .where(eq(project.ref, ref));
     }
   },
   delete: async (payload: unknown): Promise<void> => {

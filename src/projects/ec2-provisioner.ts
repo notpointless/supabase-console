@@ -592,9 +592,17 @@ docker compose up -d --force-recreate --no-deps functions 2>/dev/null || true`;
     const instanceType = instanceTypeFor(project.computeSize);
     await ec2.send(new StopInstancesCommand({ InstanceIds: [instanceId] }));
     await this.waitForState(ec2, instanceId, "stopped");
-    await ec2.send(
-      new ModifyInstanceAttributeCommand({ InstanceId: instanceId, InstanceType: { Value: instanceType } })
-    );
+    try {
+      await ec2.send(
+        new ModifyInstanceAttributeCommand({ InstanceId: instanceId, InstanceType: { Value: instanceType } })
+      );
+    } catch (e) {
+      // The type change failed (e.g. unsupported in this AZ) and the instance is stopped — never
+      // leave it down. Start it back on its existing (unchanged) type; the Elastic IP keeps the
+      // recorded host valid, so the project stays reachable. Surface the failure to the caller.
+      await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] })).catch(() => {});
+      throw e;
+    }
     await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
     const host = await this.waitForPublicHost(ec2, instanceId);
     // [console fork] Compute resize stops/starts the instance, so the public IP changed — like
