@@ -282,8 +282,18 @@ services:
       ]
 
   realtime:
-    # This container name looks inconsistent but is correct because realtime constructs tenant id by parsing the subdomain
+    # This container name looks inconsistent but is correct because realtime constructs the tenant
+    # id by parsing the subdomain of the host it's reached on (-> tenant "realtime-dev", the one
+    # SEED_SELF_HOST seeds). [console fork] buildStack STRIPS container_name for multi-tenant
+    # isolation, which would otherwise leave realtime reachable only as "realtime" -> tenant
+    # "realtime" -> TenantNotFound. The network alias below preserves the hostname realtime needs,
+    # so Kong's realtime-dev.supabase-realtime:4000 upstream resolves and the subdomain maps to the
+    # seeded tenant. (On EC2 the fork keeps the container_name, so it resolves there anyway.)
     container_name: realtime-dev.supabase-realtime
+    networks:
+      default:
+        aliases:
+          - realtime-dev.supabase-realtime
     image: supabase/realtime:v2.102.3
     restart: unless-stopped
     depends_on:
