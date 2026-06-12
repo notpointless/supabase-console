@@ -82,7 +82,10 @@ export async function queryProjectSql(project: Project, sql: string): Promise<st
     });
   }
 
-  const cmd = `docker exec ${container} psql -U ${user} -d postgres -t -A -c ${JSON.stringify(sql)}`;
+  // shellQuote (single-quotes), NOT JSON.stringify: a double-quoted bash arg still expands
+  // $(...) and backticks, so JSON-quoting arbitrary SQL would be a shell-injection vector on
+  // the instance. Single-quoting blocks ALL expansion.
+  const cmd = `docker exec ${container} psql -U ${user} -d postgres -t -A -c ${shellQuote(sql)}`;
   const ssm = await ec2Ssm(project);
   return runCommand(ssm, ec2InstanceId(project), cmd).catch(() => "");
 }
@@ -173,7 +176,7 @@ export async function seedBranchFromParentEc2(
 
   const script =
     `docker exec -e PGPASSWORD=${shellQuote(parentPw)} ${container} ` +
-    `pg_dump -h ${parentHost} -p 5432 -U postgres -d postgres ${dumpFlags} ` +
+    `pg_dump -h ${shellQuote(parentHost)} -p 5432 -U postgres -d postgres ${dumpFlags} ` +
     `| docker exec -i ${container} psql -U ${user} -d postgres -v ON_ERROR_STOP=0`;
 
   const ssm = await ec2Ssm(branch);
